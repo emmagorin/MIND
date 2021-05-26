@@ -29,7 +29,7 @@ setwd("/Users/emma/Desktop/local_only/mind_study")
 adt_wide_orig <- read_csv("./wide_files_2021_05_21/adt_summary2021-05-20.csv")
 
 #ADT long:
-adt_long_orig <- read_csv("./long_files_2021_05_21/adt_long2021-05-22.csv")
+adt_long_orig <- read_csv("./long_files_2021_05_21/adt_long2021-05-21.csv")
 
 #Covid wide:
 covid_wide_orig <- read_csv("./wide_files_2021_05_21/covid_testing_wide2021-05-20.csv")
@@ -96,14 +96,10 @@ covid_long_orig %>%
   ungroup() %>% 
   summarize(covid_pcr_result1 = sum(covid_pcr_result1, na.rm = T), 
             covid_pcr_result2 = sum(covid_pcr_result2, na.rm = T))
-11843 - 11351
-492/11843
+
+#covid_pcr_result1 and covid_pcr_result2 now seem to match
 ```
-Based on:
-any_pcr_pos: 11,352 individuals had covid ever
-covid_pcr_result: 11,351
-covid_pcr_result2: 11,843
-It looks like the "any_pcr_pos" variable was created using the covid_pcr_result variable in the original covid_long dataset, rather than the covid_pcr_result2 variable. I think this excludes pretty much anyone who initially had an indeterminate result and then a positive one. This affects ~ 4% of people with pos covid tests.
+PCR result 1 and pcr result 2 now seem to match (5/26/21)
 
 ```{r}
 covid_long <- covid_long_orig %>% 
@@ -200,18 +196,6 @@ rm(temp_deceased_hospice, temp_covid_pos, temp_micro) # don't need this anymore
 
 ## Merges and subsets
 
-Probably get rid of the following couple of things:
-
-    ### Subset of columns of adt_wide data:
-
-    
-    ### Merge: adt_wide_covid_wide
-    Merge wide covid data and select wide ADT data. Keep only individuals in adt dataset. 
-    There are some covid tests that don't correspond to anyone in the adt dataset, this leaves those out.
-    ```{r}
-    #adt_wide_covid_wide <- left_join(adt_select, covid_wide, by = "mrn")
-    ```
-
 ### Merge: adt_long_patients
 One row per adt per patient
 ```{r}
@@ -224,21 +208,24 @@ adt_long_patients <- left_join(adt_long, patients, by = "mrn")
 adt_wide_mrns <- adt_wide_orig %>% select(mrn)
 # mrns that are in adt_long:
 adt_long_mrns <- adt_long_orig %>% group_by(mrn) %>% summarize() %>% select(mrn)
+
 # mrns that appear in adt_long but not adt_wide:
 mrns_adt_long_not_wide <- setdiff(adt_long_mrns, adt_wide_mrns)
 mrns_adt_long_not_wide
-2952/91267
+nrow(mrns_adt_long_not_wide)/nrow(adt_long_mrns)
 # about 3% of mrns in adt_long don't appear in adt_wide
-#mrns that appear in adt_wide but not adt_long
+
+#mrns that appear in adt_wide but not adt_long:
 mrns_adt_wide_not_long <- setdiff(adt_wide_mrns, adt_long_mrns)
-# no mrns appear in adt_wide and not adt_long
+nrow(mrns_adt_wide_not_long)/nrow(adt_wide_mrns)
 
 # look at records of patients in adt_long but not adt_wide:
 adt_long_not_wide <- left_join(mrns_adt_long_not_wide, adt_long, by = "mrn")
 adt_long_not_wide %>% 
-  summarize(min_dat = min(adt_event_date), 
-            max_date = max(adt_event_date), 
-            median_date = median(adt_event_date))
+  summarize(min_dat = min(adt_event_date, na.rm = T), 
+            median_date = median(adt_event_date, na.rm = T),
+            max_date = max(adt_event_date, na.rm = T)
+           )
 # no clear date pattern on who was included in adt_wide and who was not...
 ```
 
@@ -249,7 +236,6 @@ eg, patient A has 3 adt observations (ever) * 12 micro tests (ever) = 36 observa
 adt_long_micro_long_patients <- adt_long %>% 
   left_join(micro_long, by = "mrn") %>% 
   left_join(patients, by = "mrn")
-
 ```
 
 
@@ -277,13 +263,6 @@ adt_long_patients <- adt_long_patients %>%
 ```
 
 
-
-## adt_long_covid_wide_micro_long
-
-      ```{r}
-      adt_long_covid_wide_micro_long <- adt_long_covid_wide_micro_long %>% 
-        janitor::clean_names() # makes cleaner names, standardizes them with snake formal and lower case. 
-      ```
 
 
 Make mini dataset from micro_long data:
@@ -329,8 +308,6 @@ n_c <- nrow(covid_mrns)
 # Total N mrns in micro
 n_m <- nrow(micro_mrns)
 ```
-
-
 
 
 # Exploratory analysis of mortality, etc:
@@ -873,36 +850,17 @@ micro_long_positives_only %>%
   group_by(organism_name, specimen_group) %>% 
   summarize(n_cases = n()) %>% 
   ungroup() %>% 
-  slice_max(n_cases, n = 20) %>% 
+  slice_max(n_cases, n = 10) %>% 
   kable()
 
+# blood results only: 
 micro_long_positives_only %>% 
-  group_by(organism_name, specimen_group) %>% 
-  summarize(n = n()) %>% 
-  arrange(desc(n)) %>% 
-  mutate(org_spec = paste(organism_name, specimen_group, "_")) %>% 
-  slice_head(n = 10) %>% 
-  ggplot(aes(x = org_spec, y = n)) +
-  geom_histogram()
-
-############################ above doesn't work yet.
-```
-
-Graphs
-```{r}
-micro_long_positives_only %>% 
+  filter(specimen_group == "Blood") %>% 
   group_by(organism_name) %>% 
-  arrange(desc())
-  ggplot(aes(x = organism_category)) +
-  geom_bar()
-
-
-
-# Try this but make horizontal?
-micro_long_positives_only
-  group_by(organism_name, specimen_group) %>% 
-  ggplot(aes(x = organism_name)) +
-  geom_bar()
+  summarize(n_cases = n()) %>% 
+  ungroup() %>% 
+  slice_max(n_cases, n = 10) %>% 
+  kable()
 ```
 
 
