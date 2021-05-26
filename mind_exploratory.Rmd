@@ -26,19 +26,19 @@ All code files will be kept in dropbox directory.
 setwd("/Users/emma/Desktop/local_only/mind_study")
 
 #ADT wide:
-adt_wide_orig <- read_csv("./wide_files_2_24/adt_summary2021-02-24.csv")
+adt_wide_orig <- read_csv("./wide_files_2021_05_21/adt_summary2021-05-20.csv")
 
 #ADT long:
-adt_long_orig <- read_csv("./long_files_2_24/adt_long2021-02-24.csv")
+adt_long_orig <- read_csv("./long_files_2021_05_21/adt_long2021-05-22.csv")
 
 #Covid wide:
-covid_wide_orig <- read_csv("./wide_files_2_24/covid_testing_wide2021-02-24.csv")
+covid_wide_orig <- read_csv("./wide_files_2021_05_21/covid_testing_wide2021-05-20.csv")
 
 #Covid long:
-covid_long_orig <- read_csv("./long_files_2_24/covid_pcr_long2021-02-24.csv")
+covid_long_orig <- read_csv("./long_files_2021_05_21/covid_pcr_long2021-05-21.csv")
 
 #Micro long:
-micro_long_orig <- read_csv("./long_files_2_24/micro_long2021-02-24.csv")
+micro_long_orig <- read_csv("./long_files_2021_05_21/micro_long2021-05-20.csv")
 ```
 
 ## Data cleaning
@@ -122,7 +122,7 @@ micro_long <- micro_long_orig %>%
   janitor::clean_names() %>% 
   select(mrn:organism_group) %>% 
   rename(admit_dt = admit_date_time,
-         specimen_collected_dt = specimen_collected_date_time) %>% # put date time variables in consistent naming format.
+         order_dt = order_date_time) %>% # put date time variables in consistent naming format.
   mutate(abnormal_result_logical = case_when(is.na(abnormal_result) ~ F,
                                              abnormal_result == "Y" ~ T))
 ```
@@ -295,7 +295,7 @@ Make mini dataset from micro_long data:
 micro_long_positives_only <- micro_long %>% 
   filter(abnormal_result_logical == T) #%>% # keep only if it was an abnormal result
   #group_by(mrn) %>% 
-  #summarize(first_abnormal_result = min(specimen_collected_dt))
+  #summarize(first_abnormal_result = min(order_dt))
 ```
 
 
@@ -508,9 +508,9 @@ micro_long %>%
   left_join(patients) %>% 
   filter(covid_pos_ever == T) %>% # keep covid pos patients only
   mutate(bacterial_after_covid = 
-           ifelse(covid_pos_dt <= specimen_collected_dt, T, F), 
+           ifelse(covid_pos_dt <= order_dt, T, F), 
          bacterial_before_covid = 
-           ifelse(covid_pos_dt >= specimen_collected_dt, T, F) 
+           ifelse(covid_pos_dt >= order_dt, T, F) 
          ) %>% 
   group_by(mrn) %>% 
   summarize(deceased_logical = as.logical(max(deceased_logical)),
@@ -912,7 +912,7 @@ Ideas for how to answer: summarize (or mutate, actually?) to get mrn's final abn
 ```{r}
 micro_long %>% 
   group_by(mrn, organism_name) %>% # one row per person-organism (maybe there need to be more? repeat infections with same organism??)
-  mutate(abnormal_result_dt = case_when(abnormal_result == T ~ specimen_collected_dt),
+  mutate(abnormal_result_dt = case_when(abnormal_result == T ~ order_dt),
          last_abnormal_result_dt = max(abnormal_result_dt),
          neg_result_after_pos ..............) %>% 
   
@@ -940,7 +940,7 @@ ggplot(temp) +
 micro_long %>% 
   filter(abnormal_result_logical == T,
          organism_name == "METHICILLIN-SUSCEPTIBLE STAPHYLOCOCCUS AUREUS") %>% 
-  ggplot(aes(x = specimen_collected_dt)) +
+  ggplot(aes(x = order_dt)) +
   geom_histogram()
 ```
 
