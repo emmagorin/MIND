@@ -802,6 +802,8 @@ adt_long_patients %>%
 
 
 # Micro data exploration
+
+## General tabulations
 Questions to consider: how do we define "the same infection" ? 
 How do we define "end of infection"? 
 If it's by a negative test following the last positive one, how do we know how soon after it needs to be to be testing for that purpose?
@@ -863,18 +865,99 @@ micro_long_positives_only %>%
   kable()
 ```
 
+## Length of infection
 
 For how many of these does the person have a subsequent negative test?
 Do people typically have a subsequent negative test that we could use to indicate the end of the infection?
 Ideas for how to answer: summarize (or mutate, actually?) to get mrn's final abnormal dt, and then see if there's another normal infection after that.
 ```{r}
-micro_long %>% 
-  group_by(mrn, organism_name) %>% # one row per person-organism (maybe there need to be more? repeat infections with same organism??)
-  mutate(abnormal_result_dt = case_when(abnormal_result == T ~ order_dt),
-         last_abnormal_result_dt = max(abnormal_result_dt),
-         neg_result_after_pos ..............) %>% 
-  
+temp <- micro_long %>% 
+  filter(specimen_group == "Blood", encounter_type == "Inpatient") %>% 
+  left_join(adt_long) %>% 
+    # We now have one row per micro result x adt record
+  filter(order_dt > adt_inpatient_dt, order_dt < adt_discharge_dt) %>% 
+    # Filter so that we have one row per micro result, with only the relevant adt admission (the one that overlaps the order date and time) attached
+  group_by(mrn) %>% 
+  arrange(mrn, order_dt) %>% 
+  select(mrn, abnormal_result_logical, organism_name, organism_category, order_dt, adt_inpatient_dt, adt_discharge_dt, adt_visit) 
+    # select relevant variables for easier viewing
+
+view(temp)
 ```
+
+Try calculating end date for infections. Start with E-Coli only
+to do: somewhere here, filter for only people who have ever had ecoli.
+```{r}
+## ecoli_mrns contains the mrns of patients who have ever had ecoli infections in blood during inpatient stays
+ecoli_mrns <- unlist(
+  micro_long %>% 
+  filter(specimen_group == "Blood", organism_name == "ESCHERICHIA COLI", encounter_type == "Inpatient") %>% 
+    mutate(mrn = as.integer(mrn)) %>% 
+  select(mrn))
+
+## calculate end of infection for e-coli infections  
+temp <- micro_long %>% 
+  filter(mrn %in% ecoli_mrns, 
+         specimen_group == "Blood", 
+         encounter_type == "Inpatient",
+         organism_name == "ESCHERICHIA COLI" | is.na(organism_name)) %>% 
+          # keep e-coli and negative inpatient blood results for patients who have ever had e-coli
+  left_join(adt_long) %>%  # now have one row per micro result x adt_record
+  filter(order_dt > adt_inpatient_dt, order_dt < adt_discharge_dt) %>% 
+          # filter so that we have one row per micro result, with only the relevant adt admission data (the one that overlaps the order date and time)
+          # note, this step also means that we will only have patients who are in the adt dataset included here.
+  group_by(mrn, adt_visit) %>% 
+          # one group per inpatient visit per patient at this point there may be visits included without any e-coli infection
+  arrange(mrn, adt_visit, order_dt) %>% 
+  select(mrn, abnormal_result_logical, organism_name, organism_category, order_dt, adt_inpatient_dt, adt_discharge_dt, adt_visit) %>% 
+          # arrange and select relevant variables for easier viewing
+  mutate(abnormal_result_dt = case_when(abnormal_result_logical == T ~ order_dt),
+         negative_result_dt = case_when(abnormal_result_logical == T ~ order_dt),
+         last_abnormal_result_dt = max(abnormal_result_dt, na.rm = T)) %>% # max (last) time of abnormal result
+  filter(order_dt > last_abnormal_result_dt | abnormal_result_logical == T) %>% 
+          # keep if abnormal result OR if it was a negative result occurring after the final abnormal result of that inpatient stay
+  summarize(first_negative_result_dt = min(negative_result_dt, na.rm = T),
+            first_abnormal_result_dt = min(abnormal_result_dt, na.rm = T)) %>% 
+  mutate(duration_of_infection = interval(first_negative_result_dt, first_abnormal_result_dt))
+
+  
+# still some errors - need to account for NAs
+
+view(temp)
+```
+
+Next attempt: differentiating between multiple infections based on conversation with Anne-Catrin and Jason online.
+Use positives only, since they seem to use positive tests to establish duration of bacteremia 
+(rather than negative tests to check for clearance)
+```{r}
+micro_long_positives_only %>% 
+  filter(specimen_group == "Blood", encounter_type == "Inpatient") %>% 
+  left_join(adt_long) %>% # We now have one row per micro result x adt record
+  filter(order_dt > adt_inpatient_dt, order_dt < adt_discharge_dt) %>% 
+    # Filter so that we have one row per micro result, with only the relevant adt admission 
+    # (the one that overlaps the order date and time) attached
+  select(mrn, abnormal_result_logical, organism_name, organism_category, order_dt, adt_inpatient_dt, adt_discharge_dt, adt_visit) %>% 
+  group_by(mrn, adt_visit, organism_name) %>% 
+  arrange(mrn, adt_visit, organism_name, order_dt) %>% 
+  mutate(previous_order_dt = lag(order_dt, n = 1, default = NA),
+         time_since_prev_ord = as.duration(order_dt - previous_order_dt),
+         time_since_category = 
+           case_when(time_since_prev_ord < as.duration("7 days") ~ "less than 7",
+                     time_since_prev_ord < as.duration("30 days") & time_since_prev_ord > as.duration("7 days") ~ "7 to 30",
+                     time_since_prev_ord > as.duration("30 days") ~ "greater than 30")) %>% 
+  ggplot(aes(x = time_since_category)) +
+  geom_bar()
+```
+
+
+
+
+
+
+
+
+
+
 
 
 
