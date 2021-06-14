@@ -1,0 +1,291 @@
+---
+title: "exploratory"
+output: 
+  html_document:
+  code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup, load packages
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(knitr)
+```
+
+# Load datasets, data cleaning, merges
+
+## Load datasets
+Set working directory to desktop -> local_only -> mind_study. 
+I'm keeping data there so that it does not sync to dropbox, and is stored locally only instead.
+All code files will be kept in dropbox directory.
+```{r}
+setwd("/Users/emma/Desktop/local_only/mind_study")
+
+#ADT wide:
+adt_wide_orig <- read_csv("./wide_files_2021_05_21/adt_summary2021-05-20.csv")
+
+#ADT long:
+adt_long_orig <- read_csv("./long_files_2021_05_21/adt_long2021-05-21.csv")
+
+#Covid wide:
+covid_wide_orig <- read_csv("./wide_files_2021_05_21/covid_testing_wide2021-05-20.csv")
+
+#Covid long:
+covid_long_orig <- read_csv("./long_files_2021_05_21/covid_pcr_long2021-05-21.csv")
+
+#Micro long:
+micro_long_orig <- read_csv("./long_files_2021_05_21/micro_long2021-05-20.csv")
+```
+
+## Data cleaning
+Use all long datasets, do basic cleaning and tidying steps first, then merge later if needed for analyses and viz. 
+One dataset per type of observation unit. 
+
+### adt_long
+Unit of observation: adt encounter. Includes admission, discharge, and transfer data
+```{r}
+adt_long <- adt_long_orig %>% 
+  janitor::clean_names() %>% 
+  select(-x1) %>% 
+  rename(covid_visits_start_dt = covid_visits_start_date,
+         adt_event_dt = adt_event_time,
+         adt_ed_admission_dt = adt_ed_admission,
+         adt_inpatient_dt = adt_inpatient,
+         adt_discharge_dt = adt_discharge) %>%  # first pos pcr test or first neg pcr test if never pos in datetime format
+  mutate(covid_visits_start_date = date(covid_visits_start_dt), # in date format
+         adt_event_date = date(adt_event_dt),
+         adt_ed_admission_date = date(adt_ed_admission_dt),
+         adt_inpatient_date = date(adt_inpatient_dt),
+         adt_discharge_date = date(adt_discharge_dt)) %>% 
+  filter(adt_event_dt < ymd(20210301)) 
+# this dataset was updated in Feb 2021, so dates later than march 2021 are errors.
+# not sure how to keep this up to date once it's later in the year and these are indistinguishable from correct data.
+```
+
+
+### covid_long
+Unit of observation: pcr test
+
+Check: should we use covid_pcr_result or covid_pcr_result2 as the true/final result?:
+```{r}
+covid_long_orig %>% 
+  filter(covid_pcr_result != covid_pcr_result2) %>% 
+  select(covid_pcr_result, covid_pcr_result2)
+```
+All observations where covid_pcr_result differs from covid_pcr_result2 have
+covid_pcr_reult = indeterminate and covid_pcr_result2 = positive. Use covid_pcr_result2 as the true/final result
+
+Check: does any_pcr_pos match covid_pcr_result or covid_pcr_result2?
+```{r}
+#check any_pcr_pos variable
+covid_wide_orig %>% 
+  mutate(covid_pos = ifelse(is.na(any_pcr_pos), FALSE, TRUE)) %>% 
+  summarize(sum_covid_pos = sum(covid_pos))
+
+#check covid results variables
+covid_long_orig %>% 
+  mutate(covid_pcr_result1_logical = (covid_pcr_result == "Positive"),
+         covid_pcr_result2_logical = (covid_pcr_result2 == "Positive")) %>% 
+  group_by(mrn) %>% 
+  summarize(covid_pcr_result1 = max(covid_pcr_result1_logical),
+            covid_pcr_result2 = max(covid_pcr_result2_logical)) %>% 
+  ungroup() %>% 
+  summarize(covid_pcr_result1 = sum(covid_pcr_result1, na.rm = T), 
+            covid_pcr_result2 = sum(covid_pcr_result2, na.rm = T))
+
+#covid_pcr_result1 and covid_pcr_result2 now seem to match
+```
+PCR result 1 and pcr result 2 now seem to match (5/26/21)
+
+```{r}
+covid_long <- covid_long_orig %>% 
+  janitor::clean_names() %>% 
+  select(mrn, covid_pcr_date, covid_pcr_accession:machine) %>% 
+  rename(covid_pcr_dt = covid_pcr_date) %>% 
+  mutate(covid_pcr_date = date(covid_pcr_dt),
+         covid_pos_logic = (covid_pcr_result2 == "Positive"))
+```
+
+
+### micro_long
+Unit of observation: micro test
+```{r}
+micro_long <- micro_long_orig %>% 
+  janitor::clean_names() %>% 
+  select(mrn:organism_group) %>% 
+  rename(admit_dt = admit_date_time,
+         order_dt = order_date_time) %>% # put date time variables in consistent naming format.
+  mutate(abnormal_result_logical = case_when(is.na(abnormal_result) ~ F,
+                                             abnormal_result == "Y" ~ T))
+```
+
+### patients
+Unit of observation: patient. 
+This dataset includes 120,031 individuals for whom we have covid test information. 
+Some of these people, but not all, are included in the adt dataset. All mrns in the 
+adt dataset are included in the covid data, and therefore in the patients_long df created here. 
+Pull patient-level data from the covid dataset, and a few other patient-level variables from the other datasets.
+
+Additional basic info to consider for patients:
+ 
+
+Check: which MRNs in the covid testing data are also in the adt data, and vice versa?
+```{r}
+# How many of the mrns in the covid_wide data are also in the adt_wide data?
+sum(covid_wide_orig$mrn %in% adt_wide_orig$mrn)
+# 88315 out of 120031 obs in the covid_wide_orig dataset are in the adt_wide_orig dataset.
+# all mrns in the adt data are in the covid data.
+```
+
+Set up a few other patient-level variables to include:
+```{r}
+temp_deceased_hospice <- adt_long %>% 
+  mutate(deceased_logical = adt_discharge_disp == "Expired",
+         hospice_logical = adt_discharge_disp == "Hospice/Medical Facility",
+         deceased_dt = case_when(deceased_logical == T ~ adt_discharge_dt),
+         hospice_dt = case_when(hospice_logical == T ~ adt_discharge_dt)) %>% 
+  group_by(mrn) %>% 
+  summarize(deceased_logical = as.logical(max(deceased_logical)),
+            hospice_logical = as.logical(max(hospice_logical)),
+            deceased_dt = max(deceased_dt),
+            hospice_dt = max(hospice_dt)) %>% 
+  mutate(adt_dataset = T)
+
+#checkpoint:
+temp_deceased_hospice %>% filter(is.na(deceased_logical))
+
+temp_covid_pos <- covid_long %>% 
+  group_by(mrn) %>% 
+  mutate(covid_pos_dt = case_when(covid_pos_logic == T ~ covid_pcr_dt)) %>% 
+  summarize(covid_pos_ever = as.logical(max(covid_pos_logic)),
+            covid_pos_dt = min(covid_pos_dt, na.rm = T)) %>% 
+  mutate(covid_pos_dt = na_if(covid_pos_dt, Inf))
+    
+#checkpoint: covid_pos_dt should be NA if covid_pos_ever is F, and should not be NA otherwise
+temp_covid_pos %>% filter(covid_pos_ever == T & is.na(covid_pos_dt))
+temp_covid_pos %>% filter(covid_pos_ever == F & is.na(covid_pos_dt) == F)
+
+temp_micro <- micro_long %>% 
+  group_by(mrn) %>%
+  summarize(bacterial_infection_ever = max(abnormal_result_logical)) %>% 
+  mutate(micro_dataset = T)
+```
+
+Create patients dataframe.
+Patients should include all mrns that we have.
+adt_dataset, covid_dataset and micro_dataset variables indicate whether the mrn appears in the corresponding dataset.
+```{r}
+patients  <- covid_wide_orig %>% 
+  janitor::clean_names() %>% 
+  select(mrn, dob, sex, zipcode, 
+         race, ethnicity, combined_race_ethnicity, 
+         insurance_type, insurance_plan) %>% 
+  mutate(covid_dataset = T) %>% 
+  full_join(temp_deceased_hospice, by = "mrn") %>% 
+  full_join(temp_covid_pos, by = "mrn") %>%
+  full_join(temp_micro, by = "mrn") %>% 
+  replace_na(list(adt_dataset = F, covid_dataset = F, micro_dataset = F))
+  
+rm(temp_deceased_hospice, temp_covid_pos, temp_micro) # don't need this anymore
+```
+
+
+## Merges and subsets
+
+### Merge: adt_long_patients
+One row per adt per patient
+```{r}
+adt_long_patients <- left_join(adt_long, patients, by = "mrn")
+```
+
+### Troubleshoot: discrepencies btw adt_wide and adt_long datasets:
+```{r}
+# mrns that are in adt_wide:
+adt_wide_mrns <- adt_wide_orig %>% select(mrn)
+# mrns that are in adt_long:
+adt_long_mrns <- adt_long_orig %>% group_by(mrn) %>% summarize() %>% select(mrn)
+
+# mrns that appear in adt_long but not adt_wide:
+mrns_adt_long_not_wide <- setdiff(adt_long_mrns, adt_wide_mrns)
+mrns_adt_long_not_wide
+nrow(mrns_adt_long_not_wide)/nrow(adt_long_mrns)
+# about 3% of mrns in adt_long don't appear in adt_wide
+
+#mrns that appear in adt_wide but not adt_long:
+mrns_adt_wide_not_long <- setdiff(adt_wide_mrns, adt_long_mrns)
+nrow(mrns_adt_wide_not_long)/nrow(adt_wide_mrns)
+
+# look at records of patients in adt_long but not adt_wide:
+adt_long_not_wide <- left_join(mrns_adt_long_not_wide, adt_long, by = "mrn")
+adt_long_not_wide %>% 
+  summarize(min_dat = min(adt_event_date, na.rm = T), 
+            median_date = median(adt_event_date, na.rm = T),
+            max_date = max(adt_event_date, na.rm = T)
+           )
+# no clear date pattern on who was included in adt_wide and who was not...
+```
+
+### Merge: adt_long_micro_long_patients
+Should contain one row per admission per micro test per patient.
+eg, patient A has 3 adt observations (ever) * 12 micro tests (ever) = 36 observations for patient A in this dataset.
+```{r}
+adt_long_micro_long_patients <- adt_long %>% 
+  left_join(micro_long, by = "mrn") %>% 
+  left_join(patients, by = "mrn")
+```
+
+
+# Data Cleaning
+
+## adt_long_patients
+
+Add covid admission and time in hospital variables
+```{r}
+adt_long_patients <- adt_long_patients %>% 
+  mutate(dur_covid_to_inpatient = 
+           case_when(!is.na(adt_inpatient_dt) & covid_pos_ever == T ~ as.duration(adt_inpatient_dt - covid_pos_dt)),
+         # dur_covid_to_admission is the time interval between the datetime of first positive PCR test and the inpatient admission datetime, for patients who ever had pos pcr test.
+        covid_admission = case_when(dur_covid_to_inpatient < duration(day = 7) & dur_covid_to_inpatient > duration(day = -2) ~ T, 
+                                    dur_covid_to_inpatient > duration(day = 7) ~ F,
+                                    dur_covid_to_inpatient < duration(day = -2) ~ F,
+                                    is.na(dur_covid_to_inpatient) ~ F),
+        # covid_admission is true if the admission took place within 7 days after or 2 days before time of first positive PCR test.
+        covid_inpatient_admission_dt = ifelse(covid_admission == T, adt_inpatient_dt, NA),
+        # datetime of inpatient admission if it was a "covid admission"
+        covid_inpatient_discharge_dt = ifelse(covid_admission == T, adt_discharge_dt, NA),
+        #datetime of discharge if it was a "covid admission"
+        covid_admission_time_in_hosp = case_when(covid_admission == T ~ as.duration(adt_discharge_dt - adt_inpatient_dt)))
+        # covid_admission_time_in_hospital is the duration btw admission and discharge for a covid admission. 
+```
+
+Make mini dataset from micro_long data:
+- one mrn per patient who has ever had an abnormal result for a bacterial infection
+- type of culture
+- type of pathogen?
+- Date of first abnormal result, if so. NA if not. 
+```{r}
+micro_long_positives_only <- micro_long %>% 
+  filter(abnormal_result_logical == T) #%>% # keep only if it was an abnormal result
+  #group_by(mrn) %>% 
+  #summarize(first_abnormal_result = min(order_dt))
+```
+
+# Write each dataframe to csv
+To be loaded and used in the exploratory file:
+```{r}
+setwd("/Users/emma/Desktop/local_only/mind_study")
+
+write_csv(adt_long, "./adt_long.csv")
+write_csv(adt_long_patients, "./adt_long_patients.csv")
+write_csv(covid_long, "./covid_long.csv")
+write_csv(micro_long, "./micro_long.csv")
+write_csv(micro_long_positives_only, "./micro_long_positives_only.csv")
+write_csv(patients, "./patients.csv")
+
+
+```
+
