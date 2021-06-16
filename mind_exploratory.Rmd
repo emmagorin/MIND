@@ -679,6 +679,7 @@ Next attempt: differentiating between multiple infections based on conversation 
 Use positives only, since they seem to use positive tests to establish duration of bacteremia 
 (rather than negative tests to check for clearance). Following code just looks at 
 ```{r}
+# make list of numbers of infections by organism and lapse times:
 micro_long_positives_only %>% 
   filter(specimen_group == "Blood", encounter_type == "Inpatient") %>% 
   left_join(adt_long) %>% # We now have one row per micro result x adt record
@@ -740,11 +741,14 @@ duration_of_bacteremia <- micro_long_positives_only %>%
   arrange(mrn, adt_visit, organism_name, order_dt) %>% 
   mutate(previous_order_dt = lag(order_dt, n = 1, default = NA),
          time_since_prev_ord = as.duration(order_dt - previous_order_dt),
-         max_lapse_in_visit = as.duration(max(time_since_prev_ord, na.rm = T)),
-         max_lapse_in_visit = replace(max_lapse_in_visit, max_lapse_in_visit == -Inf, 0)) %>% 
-    # produces some -Infs, but that shouldn't cause a problem.
-  #filter(max_lapse_in_visit < as.duration("30 days")) %>% 
-  group_by(mrn, adt_visit, organism_name) %>% 
+         time_since_prev_ord = replace_na(time_since_prev_ord, 0), # make 0 if NA. Should avoid warnings.
+         max_lapse_in_visit = as.duration(max(time_since_prev_ord)),
+         start_new_infection_dt = case_when(time_since_prev_ord > as.duration("30 days") ~ order_dt), 
+         start_new_infection_dt = max(start_new_infection_dt, na.rm = T),
+         infection_number = case_when(is.na(start_new_infection_dt)==T ~ 1, # infection_number is 1 if there was never a lapse of >30 days
+                                      is.na(start_new_infection_dt)==F & order_dt<start_new_infection_dt ~1, # infection_number is 1 if there was a lapse of 30 days and this test took place before lapse
+                                      is.na(start_new_infection_dt)==F & order_dt>=start_new_infection_dt ~ 2)) %>% # infection_number is 2 if there was a lapse of 30 days and test took place after lapse.
+  group_by(mrn, adt_visit, organism_name, infection_number) %>% # grouping by infection number allows me to separate out separate infections
   summarize(first_dt = min(order_dt, na.rm = T),
             last_dt = max(order_dt, na.rm = T),
             max_lapse_in_visit = as.duration(max(max_lapse_in_visit, na.rm = T))) %>% 
@@ -801,6 +805,9 @@ duration_of_bacteremia %>%
   ungroup() %>% 
   slice_max(n_cases, n = 10) %>% 
   kable()
+  
+
+## will want to edi thte below to be for all organisms, not just staph epi
 
 for(i in c("STAPHYLOCOCCUS EPIDERMIDIS",
            "ESCHERICHIA COLI", 
