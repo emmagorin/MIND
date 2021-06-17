@@ -743,34 +743,32 @@ duration_of_bacteremia <- micro_long_positives_only %>%
          time_since_prev_ord = as.duration(order_dt - previous_order_dt),
          time_since_prev_ord = replace_na(time_since_prev_ord, 0), # make 0 if NA. Should avoid warnings.
          max_lapse_in_visit = as.duration(max(time_since_prev_ord)),
-         start_new_infection_dt = case_when(time_since_prev_ord > as.duration("30 days") ~ order_dt), 
-         start_new_infection_dt = max(start_new_infection_dt, na.rm = T),
-         infection_number = case_when(is.na(start_new_infection_dt)==T ~ 1, # infection_number is 1 if there was never a lapse of >30 days
-                                      is.na(start_new_infection_dt)==F & order_dt<start_new_infection_dt ~1, # infection_number is 1 if there was a lapse of 30 days and this test took place before lapse
-                                      is.na(start_new_infection_dt)==F & order_dt>=start_new_infection_dt ~ 2)) %>% # infection_number is 2 if there was a lapse of 30 days and test took place after lapse.
+         start_new_infection_dt = case_when(time_since_prev_ord > as.duration("30 days") ~ order_dt),
+         start_new_infection_dt = max(start_new_infection_dt, na.rm=T),
+         start_new_infection_dt = na_if(start_new_infection_dt, -Inf),
+         infection_number = case_when(is.na(start_new_infection_dt) ~ 1, 
+                                      # infection_number is 1 if there was never a lapse of >30 days
+                                      is.na(start_new_infection_dt)==F & order_dt<start_new_infection_dt ~ 1, 
+                                      # infection_number is 1 if there was a lapse of 30 days and this test took place before lapse
+                                      is.na(start_new_infection_dt)==F & order_dt>=start_new_infection_dt ~ 2)) %>% 
+                                      # infection_number is 2 if there was a lapse of 30 days and test took place after lapse.
   group_by(mrn, adt_visit, organism_name, infection_number) %>% # grouping by infection number allows me to separate out separate infections
   summarize(first_dt = min(order_dt, na.rm = T),
             last_dt = max(order_dt, na.rm = T),
             max_lapse_in_visit = as.duration(max(max_lapse_in_visit, na.rm = T))) %>% 
   mutate(duration_bacteremia = as.duration(last_dt - first_dt)) %>% 
   left_join(patients) %>% 
-  select(mrn, covid_pos_ever, covid_pos_dt, organism_name, first_dt, last_dt, max_lapse_in_visit, duration_bacteremia)
+  select(mrn, adt_visit, organism_name, infection_number, covid_pos_ever, covid_pos_dt, first_dt, last_dt, max_lapse_in_visit, duration_bacteremia)
 
+# plot density of duration of bacteremia
 duration_of_bacteremia %>% 
-  filter(max_lapse_in_visit < as.duration("7 days"),
-         duration_bacteremia > as.duration("0 day")) %>% # drop all the ones that have only one test.
+  filter(duration_bacteremia > as.duration("0 day")) %>% # drop all the ones that have only one test.
   mutate(days_bacteremia = duration_bacteremia/86400) %>% 
   ggplot(aes(x = days_bacteremia)) +
   geom_density()
 
-duration_of_bacteremia <- duration_of_bacteremia %>% 
-  ungroup() %>% 
-  mutate(non_covid = (covid_pos_ever == F),
-         bacterial_ended_before_covid = (covid_pos_ever == T & covid_pos_dt > last_dt),
-         bacterial_started_before_covid = (covid_pos_ever == T & covid_pos_dt > first_dt & covid_pos_dt < last_dt),
-         covid_started_before_bacterial = (covid_pos_ever == T & covid_pos_dt < first_dt)) 
-
-duration_of_bacteremia <- duration_of_bacteremia %>% 
+# tabulate whether bacterial infections took place before, during or after covid
+duration_of_bacteremia %>% 
   ungroup() %>% 
   mutate(non_covid = (covid_pos_ever == F),
          bacterial_ended_before_covid = (covid_pos_ever == T & covid_pos_dt > last_dt),
@@ -779,12 +777,31 @@ duration_of_bacteremia <- duration_of_bacteremia %>%
   summarize(non_covid = sum(non_covid),
             bacterial_ended_before_covid = sum(bacterial_ended_before_covid),
             bacterial_started_before_covid = sum(bacterial_started_before_covid),
-            covid_started_before_bacterial = sum(covid_started_before_bacterial))
+            covid_started_before_bacterial = sum(covid_started_before_bacterial)) %>% 
+  kable()
 
+# when, more specifically, do bacterial infections take place with respect to covid diagnosis?
+duration_of_bacteremia %>% 
+  filter(covid_pos_ever == T) %>% 
+  mutate(time_from_covid_to_bacterial = (first_dt - covid_pos_dt)/86400) %>% 
+    # time from covid to bacterial is the duration of time from first positive covid pcr test
+    # until first positive test for bacterial infection for the given infection.
+    # negative times indicate that bacterial infection started (perhaps ended) before covid started
+  ggplot(aes(x = time_from_covid_to_bacterial)) +
+  geom_histogram() +
+  labs(x = "days elapsed from first positive covid pcr to first positive test for this infection",
+       title = "time from covid to bacterial infection")
+
+#How many of these bacterial infections occur during same hospitalization as covid infection?:
+duration_of_bacteremia %>% 
+  mutate(covid_and_bacterial_same_admission = (covid_pos_dt >= inpatient))
+
+***********************************************
+
+# plot duration of bacteremia for infections among non-covid patients:
 duration_of_bacteremia %>% 
   filter(non_covid==T) %>% 
-  filter(max_lapse_in_visit < as.duration("7 days"),
-         duration_bacteremia > as.duration("0 day")) %>% # drop all the ones that have only one test.
+  filter(duration_bacteremia > as.duration("0 day")) %>% # drop all the ones that have only one test.
   mutate(days_bacteremia = duration_bacteremia/86400) %>% 
   ggplot(aes(x = days_bacteremia)) +
   geom_density()
