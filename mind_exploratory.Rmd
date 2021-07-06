@@ -25,6 +25,7 @@ covid_long <- read_csv("./covid_long.csv")
 micro_long <- read_csv("./micro_long.csv")
 micro_long_positives_only <- read_csv("./micro_long_positives_only.csv")
 patients <- read_csv("./patients.csv", col_types = cols(hospice_dt = col_datetime(format = "")))
+bacterial_infections <- read_csv("./bacterial_infections.csv")
 ```
 
 # Quantify what data we have in each type of dataset by MRN:
@@ -756,50 +757,15 @@ Will want to do something like: create infection index that assigns everything a
 then group by that index variable, then summarize like I'll do below.
 
 ```{r}
-# make dataset of durations of bacteremia. May want to add certain variables and make sure to keep them through summarize step at a later time.
-duration_of_bacteremia <- micro_long_positives_only %>% 
-  filter(specimen_group == "Blood", encounter_type == "Inpatient") %>% 
-  left_join(adt_long) %>% # We now have one row per micro result x adt record
-  filter(order_dt > adt_inpatient_dt, order_dt < adt_discharge_dt) %>% 
-    # Filter so that we have one row per micro result, with only the relevant adt admission 
-    # (the one that overlaps the order date and time) attached
-  select(mrn, abnormal_result_logical, organism_name, organism_category, order_dt, adt_inpatient_dt, adt_discharge_dt, adt_visit) %>% 
-  group_by(mrn, adt_visit, organism_name) %>% 
-  arrange(mrn, adt_visit, organism_name, order_dt) %>% 
-  mutate(previous_order_dt = lag(order_dt, n = 1, default = NA),
-         time_since_prev_ord = as.duration(order_dt - previous_order_dt),
-         time_since_prev_ord = replace_na(time_since_prev_ord, 0), # make 0 if NA. Should avoid warnings.
-         max_lapse_in_visit = as.duration(max(time_since_prev_ord)),
-         start_new_infection_dt = case_when(time_since_prev_ord > as.duration("30 days") ~ order_dt),
-         start_new_infection_dt = max(start_new_infection_dt, na.rm=T),
-         start_new_infection_dt = na_if(start_new_infection_dt, -Inf),
-         infection_number = case_when(is.na(start_new_infection_dt) ~ 1, 
-                                      # infection_number is 1 if there was never a lapse of >30 days
-                                      is.na(start_new_infection_dt)==F & order_dt<start_new_infection_dt ~ 1, 
-                                      # infection_number is 1 if there was a lapse of 30 days and this test took place before lapse
-                                      is.na(start_new_infection_dt)==F & order_dt>=start_new_infection_dt ~ 2)) %>% 
-                                      # infection_number is 2 if there was a lapse of 30 days and test took place after lapse.
-  group_by(mrn, adt_visit, organism_name, infection_number) %>% # grouping by infection number allows me to separate out separate infections
-  summarize(first_dt = min(order_dt, na.rm = T),
-            last_dt = max(order_dt, na.rm = T),
-            max_lapse_in_visit = as.duration(max(max_lapse_in_visit, na.rm = T))) %>% 
-  mutate(duration_bacteremia = as.duration(last_dt - first_dt)) %>% 
-  left_join(patients) %>% 
-  left_join(adt_long) %>% # We now have one row per micro result x adt record
-  filter(first_dt > adt_inpatient_dt, first_dt < adt_discharge_dt) %>% 
-    # repeat this step from the beginning so we have all the data from patients and adt available.
-    mutate(covid_and_bacterial_same_admission = (covid_pos_dt >= (adt_event_dt - as.duration("48 hours")) & covid_pos_dt <= adt_discharge_dt),
-           covid_and_bacterial_same_admission = replace_na(covid_and_bacterial_same_admission, F))
-
 # plot density of duration of bacteremia
-duration_of_bacteremia %>% 
+bacterial_infections %>% 
   filter(duration_bacteremia > as.duration("0 day")) %>% # drop all the ones that have only one test.
   mutate(days_bacteremia = duration_bacteremia/86400) %>% 
   ggplot(aes(x = days_bacteremia)) +
   geom_density()
 
 # tabulate whether bacterial infections took place before, during or after covid
-duration_of_bacteremia %>% 
+bacterial_infections %>% 
   ungroup() %>% 
   mutate(non_covid = (covid_pos_ever == F),
          bacterial_ended_before_covid = (covid_pos_ever == T & covid_pos_dt > last_dt),
@@ -812,7 +778,7 @@ duration_of_bacteremia %>%
   kable()
 
 # when, more specifically, do bacterial infections take place with respect to covid diagnosis?
-duration_of_bacteremia %>% 
+bacterial_infections %>% 
   filter(covid_pos_ever == T) %>% 
   mutate(time_from_covid_to_bacterial = (first_dt - covid_pos_dt)/86400) %>% 
     # time from covid to bacterial is the duration of time from first positive covid pcr test
@@ -824,7 +790,7 @@ duration_of_bacteremia %>%
        title = "time from covid to bacterial infection")
 
 #How many of these bacterial infections occur during same hospitalization as covid infection?:
-duration_of_bacteremia %>% 
+bacterial_infections %>% 
   ungroup() %>% 
   summarize(total_n = n(), 
             non_covid = sum(covid_pos_ever == F),
@@ -833,7 +799,7 @@ duration_of_bacteremia %>%
   kable()
 
 #How many of these bacterial infections occur during same hospitalization as covid infection?:
-duration_of_bacteremia %>% 
+bacterial_infections %>% 
   ungroup() %>% 
   group_by(organism_name) %>% 
   summarize(total_n = n(), 
@@ -847,7 +813,7 @@ duration_of_bacteremia %>%
 
 # Again: when, more specifically do bacterial infections take place with respect to covid diagnosis? This time, look just at 
 # bacterial infections that took place during the same hospital stay as covid cases:
-duration_of_bacteremia %>% 
+bacterial_infections %>% 
   filter(covid_pos_ever == T,
          covid_and_bacterial_same_admission == T) %>% 
   mutate(time_from_covid_to_bacterial = (first_dt - covid_pos_dt)/86400) %>% 
@@ -860,14 +826,14 @@ duration_of_bacteremia %>%
        title = "Time from covid to bacterial infection among bacterial infections that occured during  same inpatient stay as covid diagnosis")
 
 # These plots so far are per bacterial infection - how many patients do they represent?:
-duration_of_bacteremia %>% 
+bacterial_infections %>% 
   filter(covid_pos_ever == T,
          covid_and_bacterial_same_admission == T) %>% 
   ungroup() %>% 
   count(mrn)
 
 # plot duration of bacteremia for infections among non-covid patients:
-duration_of_bacteremia %>% 
+bacterial_infections %>% 
   filter(covid_and_bacterial_same_admission == F) %>% 
   #filter(duration_bacteremia > as.duration("0 day")) %>% # drop all the ones that have only one test.
   mutate(days_bacteremia = duration_bacteremia/86400) %>% 
@@ -877,7 +843,7 @@ duration_of_bacteremia %>%
   labs(title = "Duration of bacteremia among infections that did not take place during an admission with a covid diagnosis",
        x = "Days of bacteremia")
 
-duration_of_bacteremia %>% 
+bacterial_infections %>% 
   filter(covid_pos_ever == T, covid_and_bacterial_same_admission == T) %>% 
   #filter(duration_bacteremia > as.duration("0 day")) %>% # drop all the ones that have only one test.
   mutate(days_bacteremia = duration_bacteremia/86400) %>% 
@@ -888,14 +854,14 @@ duration_of_bacteremia %>%
        x = "Days of bacteremia")
 
 # plot both on same graph:
-duration_of_bacteremia %>% 
+bacterial_infections %>% 
   filter(duration_bacteremia != 0) %>% 
   mutate(days_bacteremia = duration_bacteremia/86400) %>% 
   ggplot(aes(x = days_bacteremia, colors = covid_and_bacterial_same_admission)) +
   geom_density()
 
 # Actually look at most common blood infections:
-duration_of_bacteremia %>% 
+bacterial_infections %>% 
   filter() %>% 
   group_by(organism_name) %>% 
   summarize(n_cases = n()) %>% 
@@ -923,13 +889,13 @@ for(i in c("STAPHYLOCOCCUS EPIDERMIDIS",
            "ENTEROCOCCUS FAECALIS",
           "VANCOMYCIN-RESISTANT ENTEROCOCCUS FAECIUM")) {
   
-  n <- nrow(duration_of_bacteremia %>% 
+  n <- nrow(bacterial_infections %>% 
                 #filter(max_lapse_in_visit < as.duration("7 days"),
                        #duration_bacteremia > as.duration("0 seconds"),
                        # drop all the ones that have only one test.
                 filter(organism_name == i))
   
-  plot <- duration_of_bacteremia %>% 
+  plot <- bacterial_infections %>% 
     filter(#max_lapse_in_visit < as.duration("7 days"),
            #duration_bacteremia > as.duration("0 seconds"), # drop all the ones that have only one test.
            organism_name == i) %>% # filter by organism name 
@@ -939,14 +905,14 @@ for(i in c("STAPHYLOCOCCUS EPIDERMIDIS",
     xlim(0,x_axes[x_axis]) +
     labs(title = paste("Duration of bacteremia for ", i, "; N = ", n, sep = ""))
   
-  n_non_covid <- nrow(duration_of_bacteremia %>% 
+  n_non_covid <- nrow(bacterial_infections %>% 
                         filter(organism_name == i,
                                covid_and_bacterial_same_admission == F))
-  n_covid <- nrow(duration_of_bacteremia %>% 
+  n_covid <- nrow(bacterial_infections %>% 
                         filter(organism_name == i,
                                covid_and_bacterial_same_admission == T))
   
-  non_covid_plot <- duration_of_bacteremia %>% 
+  non_covid_plot <- bacterial_infections %>% 
     filter(organism_name == i,
            covid_and_bacterial_same_admission == F) %>% 
     mutate(days_bacteremia = duration_bacteremia/86400) %>% 
@@ -955,7 +921,7 @@ for(i in c("STAPHYLOCOCCUS EPIDERMIDIS",
     xlim(0,x_axes[x_axis]) +
     labs(title = paste("Duration of bacteremia for ", i, " infections NOT during covid admission; N = ", n_non_covid, sep = ""))
   
-  covid_plot <- duration_of_bacteremia %>% 
+  covid_plot <- bacterial_infections %>% 
     filter(organism_name == i,
            covid_and_bacterial_same_admission == T) %>% 
     mutate(days_bacteremia = duration_bacteremia/86400) %>% 
@@ -964,7 +930,7 @@ for(i in c("STAPHYLOCOCCUS EPIDERMIDIS",
     xlim(0,x_axes[x_axis]) +
     labs(title = paste("Duration of bacteremia for ", i, " infections DURING covid admissions; N = ", n_covid, sep = ""))
   
-  plot_covid_non_covid <- duration_of_bacteremia %>% 
+  plot_covid_non_covid <- bacterial_infections %>% 
     filter(organism_name == i) %>% 
     mutate(days_bacteremia = duration_bacteremia/86400) %>% 
     ggplot(aes(x = days_bacteremia, col = covid_and_bacterial_same_admission)) +
@@ -979,13 +945,13 @@ for(i in c("STAPHYLOCOCCUS EPIDERMIDIS",
   
   x_axis <- x_axis + 1 # cycle through x axes values to assign appropriate limits for x axis
   
-  # n2 <- nrow(duration_of_bacteremia %>% 
+  # n2 <- nrow(bacterial_infections %>% 
   #               filter(max_lapse_in_visit < as.duration("7 days"),
   #                      duration_bacteremia > as.duration("3 days"),
   #                      # drop all the ones that have only one test.
   #               organism_name == i))
   
-  # plot2 <- duration_of_bacteremia %>% 
+  # plot2 <- bacterial_infections %>% 
   #   filter(max_lapse_in_visit < as.duration("7 days"),
   #          duration_bacteremia > as.duration("3 days"), # drop all the ones that have only one test.
   #          organism_name == i) %>% # filter by organism name 
@@ -996,13 +962,13 @@ for(i in c("STAPHYLOCOCCUS EPIDERMIDIS",
   
   # print(plot2)
   
-  #  n3 <- nrow(duration_of_bacteremia %>% 
+  #  n3 <- nrow(bacterial_infections %>% 
   #               filter(max_lapse_in_visit < as.duration("30 days"),
   #                      duration_bacteremia > as.duration("3 days"),
   #                      # drop all the ones that have only one test.
   #               organism_name == i))
   # 
-  # plot3 <- duration_of_bacteremia %>% 
+  # plot3 <- bacterial_infections %>% 
   #   filter(max_lapse_in_visit < as.duration("30 days"),
   #          duration_bacteremia > as.duration("3 days"), # drop all the ones that have only one test.
   #          organism_name == i) %>% # filter by organism name 
