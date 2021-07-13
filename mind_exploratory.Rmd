@@ -524,8 +524,97 @@ adt_long_patients %>%
   labs(title = "Distribution of time in hospital for covid patients in days")
 ```
 
-Stopping point 6/28 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+add 7/5-7/6: Set up dataset of covid stays merged with bacterial infections
+```{r}
+#first, set up bacterial infections dataset:
+bacterial_infections_temp <- bacterial_infections %>% 
+  select(mrn, adt_visit, organism_name, first_dt, last_dt, max_lapse_in_visit, duration_bacteremia,
+         adt_inpatient_dt, covid_and_bacterial_same_admission) %>% 
+  filter(organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS")
+    # leave out these common contaminants, may want to refine this later.
 
+adt_patients_bacterial_temp <- adt_long_patients %>% 
+  filter(covid_admission == T) %>% # keep only "covid admissions"
+  left_join(bacterial_infections_temp, by = c("mrn" = "mrn", "adt_inpatient_dt" = "adt_inpatient_dt")) %>% 
+    # join by mrn and by inpatient admission, so each should be matched only with bacterial infections taking place during that inpatient admission.
+    mutate(bacterial_infection = case_when(is.na(organism_name) ~ F, is.na(organism_name) == F ~ T))
+    # bacterial infection is true if the observation has a bacterial infection, false otherwise.
+    # kind of the same as covid_and_bacterial_same_admission, may want to simplify later.
+```
+
+Use this dataset to tabulate number of infections, plot time in hospital among covid patients with and without bacterial infections, and test for sameness of time in hospital for these two groups
+```{r}
+# How many infections did each covid patient have that occurred during covid inpatient admissions?
+adt_patients_bacterial_temp %>% 
+  group_by(mrn) %>% 
+  summarize(n_bacterial_infections = sum(bacterial_infection)) %>% 
+  ungroup() %>%  group_by(n_bacterial_infections) %>% 
+  summarize(n = n()) %>% 
+  kable()
+    # >1 means multiple infections 
+
+# plot to compare time in hospital for covid patients with and without bacterial infections:
+adt_patients_bacterial_temp %>% 
+  group_by(mrn) %>% 
+  summarize(first_inpatient_dt = min(adt_inpatient_dt),
+            last_discharge_dt = max(adt_discharge_dt),
+            bacterial_infection = as.logical(max(bacterial_infection))) %>% 
+  mutate(covid_time_in_hospital = last_discharge_dt - first_inpatient_dt,
+         covid_days_in_hospital = covid_time_in_hospital / ddays(1)) %>%
+  ungroup() %>% 
+  ggplot(aes(x = covid_days_in_hospital, color = bacterial_infection)) +
+  geom_density() +
+  labs(title = "Length of covid admissions for patients with and without bacterial infections")
+
+#make adt_patients_bacterial_temp2 with one row per mrn:
+adt_patients_bacterial_temp2 <- adt_patients_bacterial_temp %>% 
+  group_by(mrn) %>% 
+  summarize(first_inpatient_dt = min(adt_inpatient_dt),
+            last_discharge_dt = max(adt_discharge_dt),
+            bacterial_infection = as.logical(max(bacterial_infection))) %>% 
+  mutate(covid_time_in_hospital = last_discharge_dt - first_inpatient_dt,
+         covid_days_in_hospital = covid_time_in_hospital / ddays(1))
+
+# anova test for difference between time in hospital for bacterial infections vs no bacterial infection:
+anova <- aov(covid_days_in_hospital ~ bacterial_infection, data = adt_patients_bacterial_temp2)
+summary(anova)
+
+# ks test to see if time in hospital came from same distribution for bacterial infection and non-bacterial-infection patients:
+yes_bacterial_infection <- adt_patients_bacterial_temp2 %>% filter(bacterial_infection == T)
+no_bacterial_infection <- adt_patients_bacterial_temp2 %>% filter(bacterial_infection == F)
+ks.test(yes_bacterial_infection$covid_days_in_hospital, no_bacterial_infection$covid_days_in_hospital)
+```
+
+Look at other predictors of time in hospital:
+```{r}
+#Note: eventually it might be better to put age calculation in data cleaning step
+temp <- adt_patients_bacterial_temp2 %>% 
+  left_join(patients) %>% 
+  mutate(age_at_admission = as.numeric((as_date(first_inpatient_dt) - as_date(dob))/365))
+    # ok i realize this is inexact but leaving for now
+
+# let's just look at some linear models:
+model_bacterial_inf <- lm(covid_days_in_hospital ~ bacterial_infection, data = temp)
+summary(model_bacterial_inf)
+model_age <- lm(covid_days_in_hospital ~ age_at_admission, data = temp)
+summary(model_age)
+model_sex <- lm(covid_days_in_hospital ~ sex, data = temp)
+summary(model_sex)
+model_race_ethnicity <- lm(covid_days_in_hospital ~ combined_race_ethnicity, data = temp)
+summary(model_race_ethnicity)
+model_all <- lm(covid_days_in_hospital ~ bacterial_infection + age_at_admission + sex + combined_race_ethnicity, data = temp)
+summary(model_all)
+```
+Notes: probably would want to adjust for some relevant medical variables, talk to Jeff/AC/Jason about
+what those are. Likely in different datasets than the covid, adt and micro datasets I've mostly used so far.
+
+
+Things to consider:
+Better statistical tests for highly right skewed data: https://www.sciencedirect.com/science/article/pii/S1098301517301298
+
+Lots of confounding, and reverse causation, since time in hospital is needed to acquire an infection. Maybe consider matching, including matching on time until start of bacterial infection?
+
+^^^^^^^^^^^^^^ stopping point 7/6 ^^^^^^^^^^^^^^^^^^^^^^^
 
 time in hospital violin plots for each month:
 ```{r}
@@ -824,6 +913,23 @@ bacterial_infections %>%
   geom_histogram(binwidth = 1) +
   labs(x = "Days elapsed from first positive covid pcr to first positive test for this infection",
        title = "Time from covid to bacterial infection among bacterial infections that occured during  same inpatient stay as covid diagnosis")
+
+# add 7/6: try the above, but don't include likely skin contaminants (staph epi, staph hominis, staph )
+bacterial_infections %>% 
+  filter(covid_pos_ever == T,
+         covid_and_bacterial_same_admission == T,
+         organism_name!="STAPHYLOCOCCUS EPIDERMIDIS",
+         organism_name!="STAPHYLOCOCCUS HOMINIS",
+         organism_name!="STAPHYLOCOCCUS CAPITIS") %>% 
+  mutate(time_from_covid_to_bacterial = (first_dt - covid_pos_dt)/86400) %>% 
+    # time from covid to bacterial is the duration of time from first positive covid pcr test
+    # until first positive test for bacterial infection for the given infection.
+    # negative times indicate that bacterial infection started (perhaps ended) before covid started
+  ggplot(aes(x = time_from_covid_to_bacterial)) +
+  geom_histogram(binwidth = 1) +
+  labs(x = "Days elapsed from first positive covid pcr to first positive test for this infection",
+       title = "Time from covid to bacterial infection among bacterial infections, not including staph epi, staph hominis, staph capitis")
+
 
 # These plots so far are per bacterial infection - how many patients do they represent?:
 bacterial_infections %>% 
