@@ -1,0 +1,30 @@
+---
+title: "risk set matching analysis "
+output: 
+  html_document:
+  code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup, load packages
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(knitr)
+```
+
+```{r}
+setwd("/Users/emma/Desktop/local_only/mind_study")
+
+adt_long <- read_csv("./adt_long.csv")
+adt_long_patients <- read_csv("./adt_long_patients.csv")
+covid_long <- read_csv("./covid_long.csv")
+micro_long <- read_csv("./micro_long.csv")
+micro_long_positives_only <- read_csv("./micro_long_positives_only.csv")
+patients <- read_csv("./patients.csv", col_types = cols(hospice_dt = col_datetime(format = "")))
+bacterial_infections <- read_csv("./bacterial_infections.csv")
+covid_admissions_bacterial <- read_csv("./covid_admissions_bacterial.csv")
+```
