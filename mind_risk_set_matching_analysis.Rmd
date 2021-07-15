@@ -106,18 +106,6 @@ matching_df <- covid_admissions_bacterial %>%
     # index sets it up for us to choose just one row per mrn (with info for the first infection)
     # This gets rid of duplicate rows per mrn because of duplicate admissions or duplicate bacterial infections
   filter(index == 1)
-  
-  filter(first_inpatient_dt == adt_inpatient_dt) %>% # gets rid of duplicate rows per mrn because of duplicate admissions
-  filter(covid_and_bacterial_same_admission == F | first_bacterial_start_dt == first_dt) %>%  # gets rid of duplicate rows per mrn because of duplicate bacterial infections
-  arrange(mrn, first_dt) %>% 
-  
-    # keep only one obs per patient, using the first observation so that for the moment we're considering covars at baseline (not time varying)
-
-matching_df %>% 
-  group_by(mrn) %>% 
-  mutate(n = n()) %>% 
-  filter(n > 1) %>% 
-  view()
 ```
 
 Run matching procedure:
