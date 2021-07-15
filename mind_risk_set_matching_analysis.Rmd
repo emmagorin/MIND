@@ -52,6 +52,9 @@ covid_admissions_bacterial %>%
   kable()
     # >1 means multiple infections 
 
+# How many unique mrns are there?
+covid_admissions_bacterial %>%  count(mrn)
+
 # examine details of covid admissions for patients with multiple covid admissions:
 adt_long_patients %>% 
   group_by(mrn) %>% 
@@ -80,7 +83,7 @@ df <- data.frame(
 
 if (requireNamespace("survival", quietly = TRUE) &
     requireNamespace("nbpMatching", quietly = TRUE)) {
-  pairs <- coxpsmatch(n_pairs = 1, data = df, id = "hhidpn", time = "wave", trt_time = "treatment_time")
+  example_pairs <- coxpsmatch(n_pairs = 1, data = df, id = "hhidpn", time = "wave", trt_time = "treatment_time")
 }
 ```
 
@@ -88,12 +91,37 @@ Set up data for matching:
 ```{r}
 matching_df <- covid_admissions_bacterial %>% 
   group_by(mrn) %>% 
-  mutate(total_length_admission = total admission time - create like its a summarize command
-            date of first Hai
-            organism of first Hai
-            covariates - sex, race, age, etc
-            age at admission - calc from date of birth and admission time
-            admission time days
-            trt_time - day of admission on which first hai ocurred. calc from date of first hai and date of admission.
+  mutate(first_inpatient_dt = min(adt_inpatient_dt),
+         last_discharge_dt = max(adt_discharge_dt),
+         covid_time_in_hospital = last_discharge_dt - first_inpatient_dt,
+         covid_days_in_hospital = covid_time_in_hospital / ddays(1),
+         first_bacterial_start_dt = min(first_dt, na.rm = T),
+         age_at_admission = as.numeric((as_date(first_inpatient_dt) - as_date(dob))/365),
+         bacterial_infection_ever = replace_na(bacterial_infection_ever, 0),
+         bacterial_infection_ever = as.logical(bacterial_infection_ever),
+         covid_and_bacterial_same_admission = replace_na(covid_and_bacterial_same_admission, F), 
+         trt_time = case_when(!(first_bacterial_start_dt == Inf) ~ as.numeric(((first_bacterial_start_dt) - (first_inpatient_dt)) / ddays(1)))) %>% 
+  select(mrn, trt_time, covid_days_in_hospital, first_dt, first_bacterial_start_dt, everything()) %>% 
+  group_by(mrn) %>% arrange(mrn, first_dt) %>% mutate(index = row_number()) %>% 
+    # index sets it up for us to choose just one row per mrn (with info for the first infection)
+    # This gets rid of duplicate rows per mrn because of duplicate admissions or duplicate bacterial infections
+  filter(index == 1)
+  
+  filter(first_inpatient_dt == adt_inpatient_dt) %>% # gets rid of duplicate rows per mrn because of duplicate admissions
+  filter(covid_and_bacterial_same_admission == F | first_bacterial_start_dt == first_dt) %>%  # gets rid of duplicate rows per mrn because of duplicate bacterial infections
+  arrange(mrn, first_dt) %>% 
+  
+    # keep only one obs per patient, using the first observation so that for the moment we're considering covars at baseline (not time varying)
+
+matching_df %>% 
+  group_by(mrn) %>% 
+  mutate(n = n()) %>% 
+  filter(n > 1) %>% 
+  view()
+```
+
+Run matching procedure:
+```{r}
+pairs <- coxpsmatch()
 ```
 
