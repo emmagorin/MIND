@@ -89,7 +89,7 @@ if (requireNamespace("survival", quietly = TRUE) &
 
 Set up data for matching:
 ```{r}
-matching_df <- covid_admissions_bacterial %>% 
+matching_df_all_vars <- covid_admissions_bacterial %>% 
   group_by(mrn) %>% 
   mutate(first_inpatient_dt = min(adt_inpatient_dt),
          last_discharge_dt = max(adt_discharge_dt),
@@ -100,16 +100,32 @@ matching_df <- covid_admissions_bacterial %>%
          bacterial_infection_ever = replace_na(bacterial_infection_ever, 0),
          bacterial_infection_ever = as.logical(bacterial_infection_ever),
          covid_and_bacterial_same_admission = replace_na(covid_and_bacterial_same_admission, F), 
-         trt_time = case_when(!(first_bacterial_start_dt == Inf) ~ as.numeric(((first_bacterial_start_dt) - (first_inpatient_dt)) / ddays(1)))) %>% 
-  select(mrn, trt_time, covid_days_in_hospital, first_dt, first_bacterial_start_dt, everything()) %>% 
+         trt_time = case_when(!(first_bacterial_start_dt == Inf) ~ as.numeric(((first_bacterial_start_dt) - (first_inpatient_dt)) / ddays(1))),
+         time = 1) %>% 
+    # time variable is equal to one for all rows now since I have not included any time varying covariates,
+    # and therefore have just one obs per invididual.
   group_by(mrn) %>% arrange(mrn, first_dt) %>% mutate(index = row_number()) %>% 
     # index sets it up for us to choose just one row per mrn (with info for the first infection)
     # This gets rid of duplicate rows per mrn because of duplicate admissions or duplicate bacterial infections
-  filter(index == 1)
+    # Somewhat similar to just using the summarize command, but I wanted to preserve some of the variables that are 
+    # available on every row without having to include them explicitly in summarize, so I did it this way.
+  filter(index == 1) 
+
+matching_df <- matching_df_all_vars %>% 
+  select(mrn, trt_time, time, age_at_admission, sex, combined_race_ethnicity, insurance_type, adt_site, adt_care_level) %>% 
+  mutate(age_at_admission = replace_na(age_at_admission, 200),
+         )
+    # ok I realize this is not great, but I'm going to plug in values for the few missing things here just to see if I can get the matching algorithm to work. 
+    # for now, include these variables only.
 ```
 
 Run matching procedure:
 ```{r}
-pairs <- coxpsmatch()
+pairs <- coxpsmatch(n_pairs = 1, data = matching_df, id = "mrn", time = "time", trt_time = "trt_time")
+
+                    covariates = c("age_at_admission", "sex"))
+                    
+                    
+                    , "combined_race_ethnicity", "zipcode", "insurance_type", "adt_site", "adt_care_level"))
 ```
 
