@@ -100,8 +100,7 @@ matching_df_all_vars <- covid_admissions_bacterial %>%
          bacterial_infection_ever = replace_na(bacterial_infection_ever, 0),
          bacterial_infection_ever = as.logical(bacterial_infection_ever),
          covid_and_bacterial_same_admission = replace_na(covid_and_bacterial_same_admission, F), 
-         trt_time = case_when(!(first_bacterial_start_dt == Inf) ~ as.numeric(((first_bacterial_start_dt) - (first_inpatient_dt)) / ddays(1))),
-         time = 1) %>% 
+         trt_time = case_when(!(first_bacterial_start_dt == Inf) ~ as.numeric(((first_bacterial_start_dt) - (first_inpatient_dt)) / ddays(1)))) %>% 
     # time variable is equal to one for all rows now since I have not included any time varying covariates,
     # and therefore have just one obs per invididual.
   group_by(mrn) %>% arrange(mrn, first_dt) %>% mutate(index = row_number()) %>% 
@@ -113,19 +112,49 @@ matching_df_all_vars <- covid_admissions_bacterial %>%
 
 matching_df <- matching_df_all_vars %>% 
   select(mrn, trt_time, time, age_at_admission, sex, combined_race_ethnicity, insurance_type, adt_site, adt_care_level) %>% 
-  mutate(age_at_admission = replace_na(age_at_admission, 200),
-         )
-    # ok I realize this is not great, but I'm going to plug in values for the few missing things here just to see if I can get the matching algorithm to work. 
+  mutate(age_at_admission = replace_na(age_at_admission, 200)) %>% 
+  mutate_at(vars(sex:adt_care_level),  replace_na, "unknown")
+    # ok I realize this is not great, but I'm going to plug in values for the few missing things here just to see if I can get the matching function to work. 
     # for now, include these variables only.
 ```
 
-Run matching procedure:
-```{r}
-pairs <- coxpsmatch(n_pairs = 1, data = matching_df, id = "mrn", time = "time", trt_time = "trt_time")
 
-                    covariates = c("age_at_admission", "sex"))
-                    
-                    
-                    , "combined_race_ethnicity", "zipcode", "insurance_type", "adt_site", "adt_care_level"))
+I think matching function may not work because I don't have the data set up longitudinally. 
+Amend the matching dataset some more to be in the appropriate format, even though the variables we 
+are using right now are not time varying:
+```{r}
+matching_df <- matching_df_all_vars %>% 
+  mutate(trt_time = trunc(trt_time)+1,
+         covid_days_in_hospital = trunc(covid_days_in_hospital)+1) %>% 
+    # for now, just truncating these - check later if appropriate
+    # I did a weird thing and added one, to account for the fact the day 1 is in fact day 0, but will start counting from one. 
+    # For example, if an HAI is acquired at 1.3, then it ocurred during the time span of 1-2 days, which we're calling day 2 
+    # when using this uncount strategy vv
+  filter(is.na(covid_days_in_hospital) == F) %>% 
+    # toss anything that doesn't have a value for covid days in hospital
+  mutate(count = covid_days_in_hospital) %>% 
+    # make temporarily to use in uncount function
+  uncount(count) %>% 
+    # duplicates so we have one row per day in hospital
+  group_by(mrn) %>% 
+  mutate(time = row_number()) %>% 
+  select(mrn, trt_time, time, covid_days_in_hospital, age_at_admission, sex, combined_race_ethnicity, insurance_type, adt_site, adt_care_level)
+         
 ```
 
+
+
+Run matching procedure:
+```{r}
+pairs <- coxpsmatch(n_pairs = 1, data = matching_df, id = "mrn", time = "time", trt_time = "trt_time", 
+                    covariates = c("age_at_admission", "sex", "combined_race_ethnicity", "insurance_type", "adt_site", "adt_care_level"))
+```
+
+
+
+
+To do:
+- handle how to deal with missing values
+- add in additional variables including time varying ones
+- check on how I did the rounding of days in hospital and treatment day and make sure it makes sense
+- fix how "covid admissions" are defined - ie, if readmitted, make sure that gets included. 
