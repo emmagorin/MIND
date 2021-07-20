@@ -114,8 +114,7 @@ matching_df <- matching_df_all_vars %>%
   select(mrn, trt_time, time, age_at_admission, sex, combined_race_ethnicity, insurance_type, adt_site, adt_care_level) %>% 
   mutate(age_at_admission = replace_na(age_at_admission, 200)) %>% 
   mutate_at(vars(sex:adt_care_level),  replace_na, "unknown")
-    # ok I realize this is not great, but I'm going to plug in values for the few missing things here just to see if I can get the matching function to work. 
-    # for now, include these variables only.
+    
 ```
 
 
@@ -138,7 +137,11 @@ matching_df <- matching_df_all_vars %>%
     # duplicates so we have one row per day in hospital
   group_by(mrn) %>% 
   mutate(time = row_number()) %>% 
-  select(mrn, trt_time, time, covid_days_in_hospital, age_at_admission, sex, combined_race_ethnicity, insurance_type, adt_site, adt_care_level)
+  select(mrn, trt_time, time, covid_days_in_hospital, age_at_admission, sex, combined_race_ethnicity, insurance_type, adt_site, adt_care_level) %>% 
+  mutate(age_at_admission = replace_na(age_at_admission, 200)) %>% 
+  mutate_at(vars(sex:adt_care_level),  replace_na, "unknown")
+    # ok I realize this is not great, but I'm going to plug in values for the few missing things here just to see if I can get the matching function to work. 
+    # for now, include these variables only.
          
 ```
 
@@ -146,10 +149,69 @@ matching_df <- matching_df_all_vars %>%
 
 Run matching procedure:
 ```{r}
-pairs <- coxpsmatch(n_pairs = 1, data = matching_df, id = "mrn", time = "time", trt_time = "trt_time", 
-                    covariates = c("age_at_admission", "sex", "combined_race_ethnicity", "insurance_type", "adt_site", "adt_care_level"))
+pairs <- coxpsmatch(n_pairs = 227, data = matching_df, id = "mrn", time = "time", trt_time = "trt_time", 
+                    covariates = c("age_at_admission", "sex"))
+#save pairs, because this took forever and ever to run, even though it obviously gave me the wrong results:
+write_csv(pairs, "./pairs_first_attempt.csv")
+
+# , "combined_race_ethnicity", "insurance_type", "adt_site", "adt_care_level"))
 ```
 
+```{r}
+# pairs %>% filter(is.na(pair_id) == F)
+# matching_df_all_vars %>% filter(is.na(trt_time) == F) %>% nrow()
+```
+
+Make datasets of treatment and control groups:
+```{r}
+treatment_mrns <- pairs %>% filter(type == "trt")
+control_mrns <- pairs %>% filter(type == "all")
+matched_mrns <- pairs %>% filter(is.na(type) == F)
+matched_mrns %>% count(mrn) %>% nrow() # all matched mrns are unique
+
+treatment_df <- treatment_mrns %>% left_join(matching_df_all_vars)
+control_df <- control_mrns %>% left_join(matching_df_all_vars)
+matched_df <- matched_mrns %>% left_join(matching_df_all_vars)
+```
+
+Make a few plots of preliminary results:
+```{r}
+matching_df_all_vars %>% 
+  ggplot(aes(x = trt_time)) +
+  geom_density() +
+  labs(title = "Day of covid admission on which bacterial infection first detected", 
+       x = "day", y = "density") +
+  xlim(0, 210)
+
+matched_df %>% 
+  mutate(treat_control = case_when(type == "trt" ~ "infection", type == "all" ~ "no_infection")) %>% 
+  ggplot(aes(x = covid_days_in_hospital, color = treat_control)) +
+  geom_density() +
+  labs(title = "Length of covid admissions after preliminary matching")
+
+#t-test
+ttest <- t.test(x = control_df$covid_days_in_hospital, y = treatment_df$covid_days_in_hospital)
+ttest
+
+control_df %>% 
+  summarize(mean = mean(covid_days_in_hospital))
+treatment_df %>% 
+```
+
+Troubleshoot:
+```{r}
+treatment_df %>% 
+  select(mrn, type, covid_and_bacterial_same_admission, trt_time) %>% 
+  view()
+
+treatment_df %>% summarize(prop_w_infections = mean(covid_and_bacterial_same_admission))
+
+control_df %>% summarize(prop_w_infections = mean(covid_and_bacterial_same_admission))
+
+control_df %>% 
+  select(mrn, type, covid_and_bacterial_same_admission, trt_time) %>% 
+  view()
+```
 
 
 
