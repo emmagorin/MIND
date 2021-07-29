@@ -550,7 +550,7 @@ covid_admissions_bacterial %>%
   geom_density() +
   labs(title = "Length of covid admissions for patients with and without bacterial infections")
 
-#make adt_patients_bacterial_temp2 with one row per mrn:
+#make covid_admissions_bacterial_temp2 with one row per mrn:
 covid_admissions_bacterial2 <- covid_admissions_bacterial %>% 
   group_by(mrn) %>% 
   summarize(first_inpatient_dt = min(adt_inpatient_dt),
