@@ -110,11 +110,6 @@ matching_df_all_vars <- covid_admissions_bacterial %>%
     # available on every row without having to include them explicitly in summarize, so I did it this way.
   filter(index == 1) 
 
-matching_df <- matching_df_all_vars %>% 
-  select(mrn, trt_time, time, age_at_admission, sex, combined_race_ethnicity, insurance_type, adt_site, adt_care_level) %>% 
-  mutate(age_at_admission = replace_na(age_at_admission, 200)) %>% 
-  mutate_at(vars(sex:adt_care_level),  replace_na, "unknown")
-    
 ```
 
 
@@ -144,7 +139,6 @@ matching_df <- matching_df_all_vars %>%
     # for now, include these variables only.
          
 ```
-
 
 
 Run matching procedure:
@@ -212,8 +206,7 @@ control_df %>%
   select(mrn, type, covid_and_bacterial_same_admission, trt_time) %>% 
   view()
 ```
-
-
+What? Seems like this didn't work at all - put people who were controls in the treatment group, people who were treated in the control group (we might expect a few of the latter, but not this many....). 
 
 To do:
 - handle how to deal with missing values
