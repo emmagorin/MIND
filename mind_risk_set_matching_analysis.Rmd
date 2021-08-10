@@ -87,7 +87,8 @@ if (requireNamespace("survival", quietly = TRUE) &
 }
 ```
 
-Set up data for matching:
+First step of setting up data for matching:
+8/6 - to do: update some of these to match "working with dates" instructions from https://www.emilyzabor.com/tutorials/survival_analysis_in_r_tutorial.html#Part_1:_Introduction_to_Survival_Analysis
 ```{r}
 matching_df_all_vars <- covid_admissions_bacterial %>% 
   group_by(mrn) %>% 
@@ -137,16 +138,15 @@ matching_df <- matching_df_all_vars %>%
   mutate_at(vars(sex:adt_care_level),  replace_na, "unknown")
     # ok I realize this is not great, but I'm going to plug in values for the few missing things here just to see if I can get the matching function to work. 
     # for now, include these variables only.
-         
 ```
 
 
 Run matching procedure:
 ```{r}
-pairs <- coxpsmatch(n_pairs = 227, data = matching_df, id = "mrn", time = "time", trt_time = "trt_time", 
-                    covariates = c("age_at_admission", "sex"))
+# pairs <- coxpsmatch(n_pairs = 227, data = matching_df, id = "mrn", time = "time", trt_time = "trt_time", 
+#                    covariates = c("age_at_admission", "sex"))
 #save pairs, because this took forever and ever to run, even though it obviously gave me the wrong results:
-write_csv(pairs, "./pairs_first_attempt.csv")
+# write_csv(pairs, "./pairs_first_attempt.csv")
 
 # , "combined_race_ethnicity", "insurance_type", "adt_site", "adt_care_level"))
 ```
@@ -206,10 +206,66 @@ control_df %>%
   select(mrn, type, covid_and_bacterial_same_admission, trt_time) %>% 
   view()
 ```
-What? Seems like this didn't work at all - put people who were controls in the treatment group, people who were treated in the control group (we might expect a few of the latter, but not this many....). 
+Ok, it seems like this didn't work at all - put people who were controls in the treatment group, people who were treated in the control group (we might expect a few of the latter, but not this many....). 
 
 To do:
 - handle how to deal with missing values
 - add in additional variables including time varying ones
 - check on how I did the rounding of days in hospital and treatment day and make sure it makes sense
 - fix how "covid admissions" are defined - ie, if readmitted, make sure that gets included. 
+
+### Take two:
+
+This time, I'll try running the coxph first, then looping (I think?) through the matching algorithm after that using... some other package.
+
+Do coxph example from documentation:
+```{r}
+# Create the simplest test data set 
+test1 <- list(time=c(4,3,1,1,2,2,3), 
+              status=c(1,1,1,0,1,1,0), 
+              x=c(0,2,1,1,1,0,0), 
+              sex=c(0,0,0,0,1,1,1)) 
+# Fit a stratified model 
+model <- coxph(Surv(time, status) ~ x + strata(sex), test1) 
+predict(model, type = "lp")
+predict(model, type = "risk")
+predict(model, type = "expected")
+predict(model, type = "terms")
+
+# Create a simple data set for a time-dependent model
+#
+test2 <- list(start=c(1, 2, 5, 2, 1, 7, 3, 4, 8, 8),
+                stop =c(2, 3, 6, 7, 8, 9, 9, 9,14,17),
+                event=c(1, 1, 1, 1, 1, 1, 1, 0, 0, 0),
+                x    =c(1, 0, 0, 1, 0, 1, 1, 1, 0, 0) )
+
+
+summary( coxph( Surv(start, stop, event) ~ x, test2))
+
+model2 <- coxph( Surv(start, stop, event) ~ x, test2)
+
+# Fit a stratified model, clustered on patients 
+
+bladder1 <- bladder[bladder$enum < 5, ] 
+coxph(Surv(stop, event) ~ (rx + size + number) * strata(enum),
+      cluster = id, bladder1)
+
+# Fit a time transform model using current age
+coxph(Surv(time, status) ~ ph.ecog + tt(age), data=lung,
+     tt=function(x,t,...) pspline(x + t/365.25))
+```
+
+
+Setup for coxph:
+```{r}
+
+```
+
+
+coxph:
+
+
+
+
+
+
