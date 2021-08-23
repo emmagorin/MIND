@@ -17,6 +17,7 @@ library(knitr)
 library(rsmatch)
 library(survival)
 library(nbpMatching)
+library(MatchIt)
 ```
 
 ```{r}
@@ -102,8 +103,6 @@ matching_df_all_vars <- covid_admissions_bacterial %>%
          bacterial_infection_ever = as.logical(bacterial_infection_ever),
          covid_and_bacterial_same_admission = replace_na(covid_and_bacterial_same_admission, F), 
          trt_time = case_when(!(first_bacterial_start_dt == Inf) ~ as.numeric(((first_bacterial_start_dt) - (first_inpatient_dt)) / ddays(1)))) %>% 
-    # time variable is equal to one for all rows now since I have not included any time varying covariates,
-    # and therefore have just one obs per invididual.
   group_by(mrn) %>% arrange(mrn, first_dt) %>% mutate(index = row_number()) %>% 
     # index sets it up for us to choose just one row per mrn (with info for the first infection)
     # This gets rid of duplicate rows per mrn because of duplicate admissions or duplicate bacterial infections
@@ -212,7 +211,9 @@ To do:
 - handle how to deal with missing values
 - add in additional variables including time varying ones
 - check on how I did the rounding of days in hospital and treatment day and make sure it makes sense
-- fix how "covid admissions" are defined - ie, if readmitted, make sure that gets included. 
+- fix how "covid admissions" are defined - ie, if readmitted, make sure that gets included. 8/10 clarification: 
+  check notes from Jason at meeting about encounter ID/ admission summary. Make sure to include everything relevant.
+  I still haven't done this, just want to make sure I can set up the model correctly first. 
 
 ### Take two:
 
@@ -226,11 +227,11 @@ test1 <- list(time=c(4,3,1,1,2,2,3),
               x=c(0,2,1,1,1,0,0), 
               sex=c(0,0,0,0,1,1,1)) 
 # Fit a stratified model 
-model <- coxph(Surv(time, status) ~ x + strata(sex), test1) 
-predict(model, type = "lp")
-predict(model, type = "risk")
-predict(model, type = "expected")
-predict(model, type = "terms")
+example_model <- coxph(Surv(time, status) ~ x + strata(sex), test1) 
+predict(example_model, type = "lp")
+predict(example_model, type = "risk")
+predict(example_model, type = "expected")
+predict(example_model, type = "terms")
 
 # Create a simple data set for a time-dependent model
 #
@@ -242,7 +243,7 @@ test2 <- list(start=c(1, 2, 5, 2, 1, 7, 3, 4, 8, 8),
 
 summary( coxph( Surv(start, stop, event) ~ x, test2))
 
-model2 <- coxph( Surv(start, stop, event) ~ x, test2)
+example_model2 <- coxph( Surv(start, stop, event) ~ x, test2)
 
 # Fit a stratified model, clustered on patients 
 
@@ -258,11 +259,29 @@ coxph(Surv(time, status) ~ ph.ecog + tt(age), data=lung,
 
 Setup for coxph:
 ```{r}
-
+cox_ph_df <- matching_df_all_vars %>% 
+  mutate(time = case_when(is.na(trt_time) == F ~ trt_time, #time is time of bacterial infection (trt_time) if there was one
+                          is.na(trt_time) == T ~ covid_days_in_hospital), # time is censoring time (days in hospital) if there wasn't an infection
+         status = !is.na(trt_time)) %>% 
 ```
 
+Run coxph:
+```{r}
+model <- coxph(Surv(time, status) ~ age_at_admission + sex, data = cox_ph_df)
 
-coxph:
+coxph(Surv(time, status) ~ age_at_admission + sex, data = cox_ph_df) %>% 
+  gtsummary::tbl_regression(exp = TRUE)
+# Of course I should add quite a few other variables here - however, I think for the moment, I'll leave like this just to make sure I can set this up to run properly. 
+```
+
+Generate predictions from coxph model to use for matching:
+```{r}
+# Generate propensities
+propensities <- predict(model, type = "risk") # not sure about type
+
+# Add propensities (which are predicted risks..?) to cox_ph_df in order to use for risk set matching
+rs_matching_df <- 
+```
 
 
 
