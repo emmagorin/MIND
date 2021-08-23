@@ -1,0 +1,24 @@
+---
+title: "risk set matching analysis "
+output: 
+  html_document:
+  code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup, load packages
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(rsmatch)
+library(survival)
+library(nbpMatching)
+library(MatchIt)
+```
+
+
+
