@@ -1,5 +1,5 @@
 ---
-title: "risk set matching analysis "
+title: "example risk set matching"
 output: 
   html_document:
   code_folding: hide
@@ -19,6 +19,68 @@ library(survival)
 library(nbpMatching)
 library(MatchIt)
 ```
+
+# Generate toy dataframe
+For the moment, I have not included time-varying covariates.
+
+```{r}
+example_df <- tibble(id = 1:20,
+                     status = c(rep(1,5), rep(0,15)), # 1 = infection, 0 = no infection
+                     days_in_hospital = c(10,25,40,17,4,5,10,12,8,20,28,44,8,15,15,1,6,18,26,33),
+                     time = c(6,18,12,15,2,5,10,12,8,20,28,44,8,15,15,1,6,18,26,33), # if infected, time = day of infection, otherwise, time = days in hospital
+                     cov1 = c(1,1,0,0,1,0,0,1,0,1,1,0,0,1,1,0,1,1,1,0),
+                     cov2 = c(9,10,14,8,3,2,8,7,1,12,15,6,6,3,12,6,7,2,11,9),
+                     cov3 = c(1,3,3,2,2,1,1,2,1,2,3,2,1,3,2,1,3,1,1,2))
+```
+
+# Set up cox model and get propensity scores
+
+```{r}
+coxph_model <- coxph(Surv(time, status) ~ cov1 + cov2 + cov3, data = example_df)
+propensity <- predict(coxph_model, type = "risk")
+```
+
+# Matching time!
+
+Set up "risk set" dataframe, which will include everyone for starters. This will be revised each time matching happens.
+```{r}
+riskset <- tibble(example_df, propensity) %>% select(id, status, propensity, time)
+```
+
+Set up dataframe of infection times with space for output:
+```{r}
+matches <- riskset %>% 
+  filter(status == 1) %>% 
+  select(id, propensity, time, status) %>% 
+  arrange(time) %>% 
+  mutate(ctrl_id = NA, ctrl_propensity = NA, ctrl_time = NA, ctrl_status = NA)
+```
+
+Now run the matching process:
+```{r}
+for(i in 1:nrow(matches)) {
+  # pick control among eligible riskset based on propensity
+  temp <- riskset %>% 
+    filter(time >= matches$time[i], # riskset only includes those still at risk
+           id != matches$id[i]) %>% # and not infection we're trying to match
+    mutate(propensity_difference = abs(propensity - matches$propensity[i])) %>% 
+    filter(propensity_difference == min(propensity_difference))
+      # keep control with closest risk to the infection we're matching
+  
+  # plug info about control into matches df
+  matches$ctrl_id[i] <- temp$id[1]
+  matches$ctrl_propensity[i] <- temp$propensity[1]
+  matches$ctrl_time[i] <- temp$time[1]
+  matches$ctrl_status[i] <- temp$status[1]
+  
+  # save new riskset excluding the control that was just matched 
+  riskset <- riskset %>% filter(id!=temp$id[1])
+}
+```
+
+Note: with five infections, matching process seems to be nearly instant. This should 
+be efficient enough to run with the number of cases we have in the actual dataset.
+
 
 
 
