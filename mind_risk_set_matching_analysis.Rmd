@@ -219,43 +219,6 @@ To do:
 
 This time, I'll try running the coxph first, then looping (I think?) through the matching algorithm after that using... some other package.
 
-Do coxph example from documentation:
-```{r}
-# Create the simplest test data set 
-test1 <- list(time=c(4,3,1,1,2,2,3), 
-              status=c(1,1,1,0,1,1,0), 
-              x=c(0,2,1,1,1,0,0), 
-              sex=c(0,0,0,0,1,1,1)) 
-# Fit a stratified model 
-example_model <- coxph(Surv(time, status) ~ x + strata(sex), test1) 
-predict(example_model, type = "lp")
-predict(example_model, type = "risk")
-predict(example_model, type = "expected")
-predict(example_model, type = "terms")
-
-# Create a simple data set for a time-dependent model
-#
-test2 <- list(start=c(1, 2, 5, 2, 1, 7, 3, 4, 8, 8),
-                stop =c(2, 3, 6, 7, 8, 9, 9, 9,14,17),
-                event=c(1, 1, 1, 1, 1, 1, 1, 0, 0, 0),
-                x    =c(1, 0, 0, 1, 0, 1, 1, 1, 0, 0) )
-
-
-summary( coxph( Surv(start, stop, event) ~ x, test2))
-
-example_model2 <- coxph( Surv(start, stop, event) ~ x, test2)
-
-# Fit a stratified model, clustered on patients 
-
-bladder1 <- bladder[bladder$enum < 5, ] 
-coxph(Surv(stop, event) ~ (rx + size + number) * strata(enum),
-      cluster = id, bladder1)
-
-# Fit a time transform model using current age
-coxph(Surv(time, status) ~ ph.ecog + tt(age), data=lung,
-     tt=function(x,t,...) pspline(x + t/365.25))
-```
-
 
 Setup for coxph:
 ```{r}
