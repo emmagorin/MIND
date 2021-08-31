@@ -44,16 +44,16 @@ propensity <- predict(coxph_model, type = "risk")
 
 Set up "risk set" dataframe, which will include everyone for starters. This will be revised each time matching happens.
 ```{r}
-riskset <- tibble(example_df, propensity) %>% select(id, status, propensity, time)
+riskset <- tibble(example_df, propensity) %>% select(id, status, propensity, time, days_in_hospital)
 ```
 
 Set up dataframe of infection times with space for output:
 ```{r}
 matches <- riskset %>% 
   filter(status == 1) %>% 
-  select(id, propensity, time, status) %>% 
+  select(id, propensity, time, status, days_in_hospital) %>% 
   arrange(time) %>% 
-  mutate(ctrl_id = NA, ctrl_propensity = NA, ctrl_time = NA, ctrl_status = NA)
+  mutate(ctrl_id = NA, ctrl_propensity = NA, ctrl_time = NA, ctrl_status = NA, ctrl_days_in_hospital = NA)
 ```
 
 Now run the matching process:
@@ -72,6 +72,7 @@ for(i in 1:nrow(matches)) {
   matches$ctrl_propensity[i] <- temp$propensity[1]
   matches$ctrl_time[i] <- temp$time[1]
   matches$ctrl_status[i] <- temp$status[1]
+  matches$ctrl_days_in_hospital[i] <- temp$days_in_hospital[1]
   
   # save new riskset excluding the control that was just matched 
   riskset <- riskset %>% filter(id!=temp$id[1])
@@ -80,6 +81,101 @@ for(i in 1:nrow(matches)) {
 
 Note: with five infections, matching process seems to be nearly instant. This should 
 be efficient enough to run with the number of cases we have in the actual dataset.
+
+The code for the matching that I wrote is very simple - did I miss something?
+This example so far follows the procedure of sequential matching described by Lu et al 
+and by Hade et al. Since we have just one event at each time point, no special procedure is 
+needed for infected individuals to "compete" for a match (such as procedures available in
+nbpmathing, matchit, etc.) Although there are more events in the actual dataset, this same 
+process could be applied if we make the time steps when matching is done small enough - would
+that be acceptable? Or would it be better to use, say, a daily matching strategy, and then 
+figure out a more complex matching strategy when there are multiple people to be matched per day?
+The former would be the simplest, but I don't know if there's some bias that could be introduced 
+if people with events earlier get first pick of controls. This isn't a concern mentioned in any of 
+the papers I've read, so I'm likely over-thinking it.
+
+For now, we've included infected people as potential controls if they're still in the risk set,
+but this could be easily changed. They didn't happen to get matched as controls in this example.
+
+# Make some comparisons in the datasets and between matches:
+
+Set up dataset with all data and the matched individuals only
+```{r}
+# make a list of ids of the people who were matched
+matched_ppl <- c(unlist(matches$id), unlist(matches$ctrl_id))
+
+# make dataset of matching ppl only
+matched_ppl_df <- example_df %>% filter(id %in% matched_ppl)
+```
+
+Check covariate balance:
+```{r}
+# compare baseline characteristics in the unmatched sample:
+example_df %>% 
+  group_by(status) %>% 
+  summarize(mean_cov1 = mean(cov1),
+            sd_cov1 = sd(cov1),
+            mean_cov2 = mean(cov2),
+            sd_cov2 = sd(cov2),
+            mean_cov3 = mean(cov3),
+            sd_cov3 = sd(cov3))
+
+# compare baseline characteristics in the matched sample:
+matched_ppl_df %>% 
+  group_by(status) %>% 
+  summarize(mean_cov1 = mean(cov1),
+            sd_cov1 = sd(cov1),
+            mean_cov2 = mean(cov2),
+            sd_cov2 = sd(cov2),
+            mean_cov3 = mean(cov3),
+            sd_cov3 = sd(cov3))
+
+# following Hade et al, look at covariate impact on treatment hazard before and after matching:
+# before matching:
+coxph_model
+
+#after matching:
+coxph_model_matched <- coxph(Surv(time, status) ~ cov1 + cov2 + cov3, data = matched_ppl_df)
+coxph_model_matched
+```
+
+Notes: more resources on checking balance:
+https://cran.r-project.org/web/packages/MatchIt/vignettes/assessing-balance.html
+https://onlinelibrary-wiley-com.ezproxy.cul.columbia.edu/doi/epdf/10.1002/sim.3697
+
+In this very small example, there was already a pretty good balance between groups in the 
+covariates before matchin, and comparable balance after matching. I don't expect this to be the 
+case with the real data.
+
+# Look at results:
+
+```{r}
+# make subsets of data to use for t-tests (there's surely a quicker way, but this should work)
+infected <- example_df %>% filter(status == 1)
+all_uninfected <- example_df %>% filter(status == 0)
+controls <- matched_ppl_df %>% filter(status == 0)
+
+# unmatched sample:
+example_df %>% 
+  group_by(status) %>% 
+  summarize(mean_days_in_hosp = mean(days_in_hospital),
+            sd_days_in_hosp = sd(days_in_hospital))
+
+t.test(x = all_uninfected$days_in_hospital, y = infected$days_in_hospital)
+
+# matched sample:
+matched_ppl_df %>% 
+  group_by(status) %>% 
+  summarize(mean_days_in_hosp = mean(days_in_hospital),
+            sd_days_in_hosp = sd(days_in_hospital))
+
+t.test(x = controls$days_in_hospital, y = infected$days_in_hospital)
+
+# i think we're actually supposed to use a paired sample t-test (following watson et al for this)
+matches %>% mutate(diff = ctrl_days_in_hospital - days_in_hospital) %>% 
+  pull(diff) %>% # pick 
+  t.test()
+```
 
 
 
