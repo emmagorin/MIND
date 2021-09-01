@@ -215,37 +215,156 @@ To do:
   check notes from Jason at meeting about encounter ID/ admission summary. Make sure to include everything relevant.
   I still haven't done this, just want to make sure I can set up the model correctly first. 
 
-### Take two:
+## Take two:
 
 This time, I'll try running the coxph first, then looping (I think?) through the matching algorithm after that using... some other package.
 
-
 Setup for coxph:
 ```{r}
-cox_ph_df <- matching_df_all_vars %>% 
+coxph_df <- matching_df_all_vars %>% 
   mutate(time = case_when(is.na(trt_time) == F ~ trt_time, #time is time of bacterial infection (trt_time) if there was one
                           is.na(trt_time) == T ~ covid_days_in_hospital), # time is censoring time (days in hospital) if there wasn't an infection
-         status = !is.na(trt_time)) %>% 
+         status = is.na(trt_time))
 ```
 
-Run coxph:
+Set up cox model and get propensity scores:
 ```{r}
-model <- coxph(Surv(time, status) ~ age_at_admission + sex, data = cox_ph_df)
+coxph_model <- coxph(Surv(time, status) ~ age_at_admission + sex + adt_status + covid_visits_start_date + combined_race_ethnicity + insurance_type,
+               data = coxph_df)
 
-coxph(Surv(time, status) ~ age_at_admission + sex, data = cox_ph_df) %>% 
+coxph_model %>% 
   gtsummary::tbl_regression(exp = TRUE)
 # Of course I should add quite a few other variables here - however, I think for the moment, I'll leave like this just to make sure I can set this up to run properly. 
+
+propensity <- predict(coxph_model, type = "risk")
 ```
 
-Generate predictions from coxph model to use for matching:
+9/1/21: notes on things still to do:
+- adapt variables to have appropriate reference groups.
+- why doesn't propensity come out as as long as the coxph_model dataframe? Are there a bunch missing all their variables or soemthing????
+
+### Matching time!
+
+Set up "risk set" dataframe, which will include everyone for starters. This will be revised each time matching happens.
 ```{r}
-# Generate propensities
-propensities <- predict(model, type = "risk") # not sure about type
-
-# Add propensities (which are predicted risks..?) to cox_ph_df in order to use for risk set matching
-rs_matching_df <- 
+riskset <- tibble(coxph_df, propensity) %>% select(mrn, status, propensity, time, covid_days_in_hospital)
 ```
 
+Set up dataframe of infection times with space for output:
+```{r}
+matches <- riskset %>% 
+  filter(status == 1) %>% 
+  select(mrn, propensity, time, status, covid_days_in_hospital) %>% 
+  arrange(time) %>% 
+  mutate(ctrl_mrn = NA, ctrl_propensity = NA, ctrl_time = NA, ctrl_status = NA, ctrl_covid_days_in_hospital = NA)
+```
+
+Now run the matching process:
+```{r}
+for(i in 1:nrow(matches)) {
+  # pick control among eligible riskset based on propensity
+  temp <- riskset %>% 
+    filter(time >= matches$time[i], # riskset only includes those still at risk
+           mrn != matches$id[i]) %>% # and not infection we're trying to match
+    mutate(propensity_difference = abs(propensity - matches$propensity[i])) %>% 
+    filter(propensity_difference == min(propensity_difference))
+      # keep control with closest risk to the infection we're matching
+  
+  # plug info about control into matches df
+  matches$ctrl_mrn[i] <- temp$mrn[1]
+  matches$ctrl_propensity[i] <- temp$propensity[1]
+  matches$ctrl_time[i] <- temp$time[1]
+  matches$ctrl_status[i] <- temp$status[1]
+  matches$ctrl_covid_days_in_hospital[i] <- temp$covid_days_in_hospital[1]
+  
+  # save new riskset excluding the control that was just matched 
+  riskset <- riskset %>% filter(mrn!=temp$mrn[1])
+}
+```
+
+
+For now, we've included infected people as potential controls if they're still in the risk set,
+but this could be easily changed. They didn't happen to get matched as controls in this example.
+
+# Make some comparisons in the datasets and between matches:
+
+Set up dataset with all data and the matched individuals only
+```{r}
+# make a list of ids of the people who were matched
+matched_ppl <- c(unlist(matches$id), unlist(matches$ctrl_id))
+
+# make dataset of matching ppl only
+matched_ppl_df <- example_df %>% filter(id %in% matched_ppl)
+```
+
+Check covariate balance:
+```{r}
+# compare baseline characteristics in the unmatched sample:
+example_df %>% 
+  group_by(status) %>% 
+  summarize(mean_cov1 = mean(cov1),
+            sd_cov1 = sd(cov1),
+            mean_cov2 = mean(cov2),
+            sd_cov2 = sd(cov2),
+            mean_cov3 = mean(cov3),
+            sd_cov3 = sd(cov3))
+
+# compare baseline characteristics in the matched sample:
+matched_ppl_df %>% 
+  group_by(status) %>% 
+  summarize(mean_cov1 = mean(cov1),
+            sd_cov1 = sd(cov1),
+            mean_cov2 = mean(cov2),
+            sd_cov2 = sd(cov2),
+            mean_cov3 = mean(cov3),
+            sd_cov3 = sd(cov3))
+
+# following Hade et al, look at covariate impact on treatment hazard before and after matching:
+# before matching:
+coxph_model
+
+#after matching:
+coxph_model_matched <- coxph(Surv(time, status) ~ cov1 + cov2 + cov3, data = matched_ppl_df)
+coxph_model_matched
+```
+
+Notes: more resources on checking balance:
+https://cran.r-project.org/web/packages/MatchIt/vignettes/assessing-balance.html
+https://onlinelibrary-wiley-com.ezproxy.cul.columbia.edu/doi/epdf/10.1002/sim.3697
+
+In this very small example, there was already a pretty good balance between groups in the 
+covariates before matchin, and comparable balance after matching. I don't expect this to be the 
+case with the real data.
+
+# Look at results:
+
+```{r}
+# make subsets of data to use for t-tests (there's surely a quicker way, but this should work)
+infected <- example_df %>% filter(status == 1)
+all_uninfected <- example_df %>% filter(status == 0)
+controls <- matched_ppl_df %>% filter(status == 0)
+
+# unmatched sample:
+example_df %>% 
+  group_by(status) %>% 
+  summarize(mean_days_in_hosp = mean(days_in_hospital),
+            sd_days_in_hosp = sd(days_in_hospital))
+
+t.test(x = all_uninfected$days_in_hospital, y = infected$days_in_hospital)
+
+# matched sample:
+matched_ppl_df %>% 
+  group_by(status) %>% 
+  summarize(mean_days_in_hosp = mean(days_in_hospital),
+            sd_days_in_hosp = sd(days_in_hospital))
+
+t.test(x = controls$days_in_hospital, y = infected$days_in_hospital)
+
+# i think we're actually supposed to use a paired sample t-test (following watson et al for this)
+matches %>% mutate(diff = ctrl_days_in_hospital - days_in_hospital) %>% 
+  pull(diff) %>% # pick 
+  t.test()
+```
 
 
 
