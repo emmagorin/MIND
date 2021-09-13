@@ -395,6 +395,14 @@ matches %>% mutate(diff = covid_days_in_hospital - ctrl_covid_days_in_hospital) 
   t.test()
 ```
 
+Plot results:
+```{r}
+matched_people_df %>% 
+  mutate(treat_control = case_when(type == "trt" ~ "infection", type == "all" ~ "no_infection")) %>% 
+  ggplot(aes(x = covid_days_in_hospital, color = treat_control)) +
+  geom_density() +
+  labs(title = "Length of covid admissions after preliminary matching")
+```
 
 
 
