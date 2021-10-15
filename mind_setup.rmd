@@ -334,6 +334,8 @@ covid_admissions_bacterial <- adt_long_patients %>%
     # kind of the same as covid_and_bacterial_same_admission, may want to simplify later.
 ```
 
+
+
 # Write each dataframe to csv
 To be loaded and used in the exploratory file:
 ```{r}
