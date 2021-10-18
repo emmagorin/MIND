@@ -20,7 +20,7 @@ library(knitr)
 setwd("/Users/emma/Desktop/local_only/mind_study")
 
 adt_long <- read_csv("./adt_long.csv")
-adt_long_patients <- read_csv("./adt_long_patients.csv")
+adt_long_patients <- read_csv("./adt_long_patients.csv", col_types = cols(dur_covid_to_inpatient = col_double()))
 covid_long <- read_csv("./covid_long.csv")
 micro_long <- read_csv("./micro_long.csv")
 micro_long_positives_only <- read_csv("./micro_long_positives_only.csv")
@@ -1111,3 +1111,106 @@ micro_long %>%
   
   
   
+  
+
+# What counts as a covid admission?
+
+In mind_risk_set_matching_analysis, I observed that there are likely many circumstances when patients are discharged and then readmitted quickly. If both admissions occur within 7 days after covid diagnosis, then they are considered "covid admissions" according to the rules I set up earlier, which is how I noticed that this occurs. However - this might also occur after 7 days, so I'll explore this below.
+
+(In other words: What happens if we consider re-admissions that aren't within the timeframe (48 hrs before covid diagnosis through 7 days after) that would label them a "covid admission", but do occur shortly after a covid discharge, suggesting that they're likely still related to the same health concerns?)
+
+First let's look under original rules:
+```{r}
+# how many covid admissions do we have under the previous rules? (anything occuring withint 48 hrs before - 7 days after covid diagnosis is considered )
+adt_long_patients %>% 
+  summarize(total_n_covid_admissions = sum(covid_admission))
+
+# What about covid admissions per patient under original rules?:
+adt_long_patients %>% 
+  group_by(mrn) %>% 
+  summarize(n_covid_admissions = sum(covid_admission)) %>% 
+  ungroup() %>% group_by(n_covid_admissions) %>% 
+  summarize(n = n()) %>% kable()
+```
+
+Now, set up new rule and check.
+This is a little tricky - want to assign new covid_admission2 variable based on time since previous admission, but depending on whether previous admission was a covid admission - but, this should be recursive, so even if someone has had 5 admissions or whatever, if there's little time in between and the first one in the series was a covid admission, it should be considered a covid admission.
+
+Try setting this up similarly to how I set up "bacterial_infection" dataframe in the mind_setup file.
+```{r}
+temp <- adt_long_patients %>% 
+  filter(covid_pos_ever == T, 
+         dur_covid_to_inpatient > -(as.duration("2 days"))) %>% 
+    # keep only patients who ever had covid, and visits taking place later than two-days-before time of covid pos test.
+  group_by(mrn) %>% 
+  arrange(mrn, adt_inpatient_dt) %>% 
+  mutate(previous_discharge_dt = lag(adt_discharge_dt, n = 1, default = NA), 
+            # create var with time of previous discharge
+         time_since_prev_discharge = as.duration(adt_inpatient_dt - previous_discharge_dt),
+            # create var with time between previous discharge and this line's admission to inpatient care
+         time_since_prev_discharge = replace_na(time_since_prev_discharge, 0), 
+             # make 0 if NA, should avoid warnings
+         days_since_prev_discharge = time_since_prev_discharge/86400,
+         start_non_covid_admissions_dt = case_when(time_since_prev_discharge > as.duration("2 days") ~ adt_inpatient_dt),
+            # start date of admissions that are not considered to be covid admissions, because > 2 days have elapsed
+         start_non_covid_admissions_dt = min(start_non_covid_admissions_dt, na.rm=T),
+         start_non_covid_admissions_dt = na_if(start_non_covid_admissions_dt, -Inf),
+             # Establish start of non-covid admissions as inpatient admission dt if there has been a lapse of > 48 hours
+         after_lapse = (adt_inpatient_dt >= start_non_covid_admissions_dt),
+             # Is the inpatient time later than the start of non-covid admissions?
+         covid_admission2 = !(adt_inpatient_dt >= start_non_covid_admissions_dt))
+              # covid_admission2 will be true if covid test occurs within -2 - 7 days of inpatient admission, or if they occur after this but
+              # with lapses of < 48 hours since a previous appointment. Ie, if someone keeps leaving and being re-admitted in < 48 hrs, all
+              # visits will be considered to be covid visits until they have been out of the hospital for at least 48 hrs. 
+```
+
+Look at distribution of time from covid visit to subsequent visit, for patients who had a subsequent visit. (This does not include any info on visits after that)
+```{r}
+# look by week - binwidth = 7 days
+temp %>% 
+  mutate(visit_number = row_number()) %>% # number visits for each mrn starting with 1 = covid visit
+  filter(visit_number == 2) %>% # keep only visit right after covid visit
+  ggplot(aes(x = days_since_prev_discharge)) +
+  geom_histogram(binwidth = 7)
+
+# zoom in on first 30 days. So, among people who have a covid admission and then are re-admitted within 30 days, 
+# how much time elapses between their first discharge and 2nd admission?
+temp %>% 
+  mutate(visit_number = row_number()) %>% # number visits for each mrn starting with 1 = covid visit
+  filter(visit_number == 2,  # keep only visit right after covid visit
+         days_since_prev_discharge <= 30 & days_since_prev_discharge >=0) %>% # zoom on on ppl readmitted w/in 30 days. exclude those with neg values, data errors.
+  ggplot(aes(x = days_since_prev_discharge)) +
+  geom_histogram(binwidth = 1/6) # four hour bins
+```
+
+
+How many covid admissions do we have under new rule?
+```{r}
+# how many covid admissions do we have under the previous rules? (anything occuring withint 48 hrs before - 7 days after covid diagnosis is considered )
+temp %>% 
+  ungroup() %>% 
+  summarize(total_n_covid_admissions = sum(covid_admission))
+
+# how many covid admissions under new rule?
+temp %>% 
+  ungroup() %>% 
+  summarize(total_n_covid_admissions = sum(covid_admission2))
+
+# What about covid admissions per patient under original rules?:
+adt_long_patients %>% 
+  group_by(mrn) %>% 
+  summarize(n_covid_admissions = sum(covid_admission)) %>% 
+  ungroup() %>% group_by(n_covid_admissions) %>% 
+  summarize(n = n()) %>% kable()
+
+# What about covid admissions per patient under new rule?
+temp %>% 
+  group_by(mrn) %>% 
+  summarize(n_covid_admissions = sum(covid_admission2)) %>% 
+  ungroup() %>% group_by(n_covid_admissions) %>% 
+  summarize(n = n()) %>% kable()
+```
+
+Notes 10/15: I thought I finally had this ascertainment right, but it doesn't make sense that there should be more ppl with one covid admission - this should go down. (in the summary above). I think what may be going on is that we filtered for ppl who were covid pos ever, not who had covid INPATIENT ADMISSIONS ever - so inpatient visits captured without a 48 hr lapse but later than the original window (no "first" covid admission) still get captured in covid_admission2. We need to make sure that each person at least initially has a covid admission. 
+try 48, 24, 72, compare, then run by AC and Jason
+
