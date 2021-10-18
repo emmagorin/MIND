@@ -1139,10 +1139,12 @@ This is a little tricky - want to assign new covid_admission2 variable based on 
 Try setting this up similarly to how I set up "bacterial_infection" dataframe in the mind_setup file.
 ```{r}
 temp <- adt_long_patients %>% 
-  filter(covid_pos_ever == T, 
-         dur_covid_to_inpatient > -(as.duration("2 days"))) %>% 
-    # keep only patients who ever had covid, and visits taking place later than two-days-before time of covid pos test.
   group_by(mrn) %>% 
+  mutate(covid_first_admission_ever = max (covid_admission)) %>% 
+    # covid_first_admission is an indicator of whether patient ever had an admission considered a covid admission by our prvious criteria.
+  filter(covid_first_admission_ever == T, 
+         dur_covid_to_inpatient > -(as.duration("2 days"))) %>% 
+    # keep only patients who ever had a covid admission per our previous criteria and visits taking place later than two-days-before time of covid pos test.
   arrange(mrn, adt_inpatient_dt) %>% 
   mutate(previous_discharge_dt = lag(adt_discharge_dt, n = 1, default = NA), 
             # create var with time of previous discharge
