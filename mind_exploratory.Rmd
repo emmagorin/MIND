@@ -1213,6 +1213,5 @@ temp %>%
   summarize(n = n()) %>% kable()
 ```
 
-Notes 10/15: I thought I finally had this ascertainment right, but it doesn't make sense that there should be more ppl with one covid admission - this should go down. (in the summary above). I think what may be going on is that we filtered for ppl who were covid pos ever, not who had covid INPATIENT ADMISSIONS ever - so inpatient visits captured without a 48 hr lapse but later than the original window (no "first" covid admission) still get captured in covid_admission2. We need to make sure that each person at least initially has a covid admission. 
-try 48, 24, 72, compare, then run by AC and Jason
+
 
