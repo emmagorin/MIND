@@ -267,7 +267,7 @@ temp df will define more specific version of covid admission variable. This is t
 temp <- adt_long_patients %>% 
   group_by(mrn) %>% 
   mutate(covid_first_admission_ever = max (covid_admission)) %>% 
-    # covid_first_admission is an indicator of whether patient ever had an admission considered a covid admission by our prvious criteria.
+    # covid_first_admission is an indicator of whether patient ever had an admission considered a covid admission by our previous criteria.
   filter(covid_first_admission_ever == T, 
          dur_covid_to_inpatient > -(as.duration("2 days"))) %>% 
     # keep only patients who ever had a covid admission per our previous criteria and visits taking place later than two-days-before time of covid pos test.
@@ -286,8 +286,8 @@ temp <- adt_long_patients %>%
              # Establish start of non-covid admissions as inpatient admission dt if there has been a lapse of > 48 hours
          after_lapse = (adt_inpatient_dt >= start_non_covid_admissions_dt),
              # Is the inpatient time later than the start of non-covid admissions?
-         covid_admission2 = !(adt_inpatient_dt >= start_non_covid_admissions_dt)) %>% 
-              # covid_admission2 will be true if covid test occurs within -2 - 7 days of inpatient admission, or if they occur after this but with lapses of < 48 hours since a previous appointment. Ie, if someone keeps leaving and being re-admitted in < 48 hrs, all visits will be considered to be covid visits until they have been out of the hospital for at least 48 hrs.
+         covid_admission2 = if_else(covid_admission == T, T, if_else(adt_inpatient_dt < start_non_covid_admissions_dt, T, F))) %>% 
+             # covid_admission2 will be true if: 1) if covid_admission was true (if admission starts within -2 - 7 days after covid test) OR 2) if admission starts after this but with lapses of < 48 hours since a previous appointment. (if someone keeps leaving and being re-admitted in < 48 hrs, all visits will be considered to be covid visits until they have been out of the hospital for at least 48 hrs.) else, false.
   select(encounter_id, covid_admission2)
 ```
 
@@ -297,10 +297,14 @@ adt_long_patients <- adt_long_patients %>%
   left_join(temp)
 ```
 
-Checkpoint: There should be a relatively small group of observations with covid_admission2 == T and covid_admission == F
+Checkpoint: There should be a relatively small group of observations with covid_admission2 == T and covid_admission == F. 
 ```{r}
 adt_long_patients %>% 
   filter(covid_admission == F, covid_admission2 == T) %>% 
+  count()
+
+adt_long_patients %>% 
+  filter(covid_admission == T, covid_admission2 == F) %>% 
   count()
 ```
 
