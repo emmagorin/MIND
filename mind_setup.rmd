@@ -26,19 +26,25 @@ All code files will be kept in dropbox directory.
 setwd("/Users/emma/Desktop/local_only/mind_study")
 
 #ADT wide:
-adt_wide_orig <- read_csv("./wide_files_2021_05_21/adt_summary2021-05-20.csv")
+adt_wide_orig <- read_csv("./wide_files_2021_08_25/adt_summary2021-08-25.csv")
 
 #ADT long:
-adt_long_orig <- read_csv("./long_files_2021_05_21/adt_long2021-05-21.csv")
+adt_long_orig <- read_csv("./long_files_2021_08_25/adt_long2021-08-25.csv")
 
 #Covid wide:
-covid_wide_orig <- read_csv("./wide_files_2021_05_21/covid_testing_wide2021-05-20.csv")
+covid_wide_orig <- read_csv("./wide_files_2021_08_25/covid_testing_wide2021-08-25.csv")
 
 #Covid long:
-covid_long_orig <- read_csv("./long_files_2021_05_21/covid_pcr_long2021-05-21.csv")
+covid_long_orig <- read_csv("./long_files_2021_08_25/covid_pcr_long2021-08-25.csv")
 
 #Micro long:
-micro_long_orig <- read_csv("./long_files_2021_05_21/micro_long2021-05-20.csv")
+micro_long_orig <- read_csv("./long_files_2021_08_25/micro_long2021-08-25.csv")
+
+#Problems wide:
+problems_wide_orig <- read_csv("./wide_files_2021_08_25/problem_summary2021-08-25.csv")
+
+#Problems long:
+problems_long_orig <- read_csv("./long_files_2021_08_25/problem_long2021-08-25.csv")
 ```
 
 ## Data cleaning
@@ -117,7 +123,7 @@ Unit of observation: micro test
 micro_long <- micro_long_orig %>% 
   janitor::clean_names() %>% 
   select(mrn:organism_group) %>% 
-  rename(admit_dt = admit_date_time,
+  rename(collected_dt = collected_date_time,
          order_dt = order_date_time) %>% # put date time variables in consistent naming format.
   mutate(abnormal_result_logical = case_when(is.na(abnormal_result) ~ F,
                                              abnormal_result == "Y" ~ T))
@@ -125,7 +131,7 @@ micro_long <- micro_long_orig %>%
 
 ### patients
 Unit of observation: patient. 
-This dataset includes 120,031 individuals for whom we have covid test information. 
+This dataset includes individuals for whom we have covid test information. 
 Some of these people, but not all, are included in the adt dataset. All mrns in the 
 adt dataset are included in the covid data, and therefore in the patients_long df created here. 
 Pull patient-level data from the covid dataset, and a few other patient-level variables from the other datasets.
@@ -143,6 +149,7 @@ sum(covid_wide_orig$mrn %in% adt_wide_orig$mrn)
 
 Set up a few other patient-level variables to include:
 ```{r}
+# deceased or hospice outcome
 temp_deceased_hospice <- adt_long %>% 
   mutate(deceased_logical = adt_discharge_disp == "Expired",
          hospice_logical = adt_discharge_disp == "Hospice/Medical Facility",
@@ -158,6 +165,7 @@ temp_deceased_hospice <- adt_long %>%
 #checkpoint:
 temp_deceased_hospice %>% filter(is.na(deceased_logical))
 
+# covid positive ever
 temp_covid_pos <- covid_long %>% 
   group_by(mrn) %>% 
   mutate(covid_pos_dt = case_when(covid_pos_logic == T ~ covid_pcr_dt)) %>% 
@@ -165,14 +173,27 @@ temp_covid_pos <- covid_long %>%
             covid_pos_dt = min(covid_pos_dt, na.rm = T)) %>% 
   mutate(covid_pos_dt = na_if(covid_pos_dt, Inf))
     
-#checkpoint: covid_pos_dt should be NA if covid_pos_ever is F, and should not be NA otherwise
+# checkpoint: covid_pos_dt should be NA if covid_pos_ever is F, and should not be NA otherwise
 temp_covid_pos %>% filter(covid_pos_ever == T & is.na(covid_pos_dt))
 temp_covid_pos %>% filter(covid_pos_ever == F & is.na(covid_pos_dt) == F)
 
+# micro bacterial infection ever
 temp_micro <- micro_long %>% 
   group_by(mrn) %>%
   summarize(bacterial_infection_ever = max(abnormal_result_logical)) %>% 
   mutate(micro_dataset = T)
+
+# bmi
+temp_bmi <- covid_wide_orig %>% 
+  select(mrn, bmi, bmi_date, bmi_source)
+
+# problems. We're interested in: kidney disease, cardiovascular disease, diabetes
+# cdk = chronic kidney disese, dm = diabetes mellitus, htn = hypertension, cad = coronary artery disease, 
+temp_problems <- problems_wide_orig %>% 
+  select(mrn, dx_ckd, ckd_date, dx_dm, dm_date, dx_htn, htn_date, dx_cad, dx_cad_date, dx_hrt_failure, hrt_failure_date)
+
+# checkpoint: any duplicates in temp_problems?
+temp_problems %>% count(mrn) %>% count()
 ```
 
 Create patients dataframe.
@@ -188,9 +209,11 @@ patients  <- covid_wide_orig %>%
   full_join(temp_deceased_hospice, by = "mrn") %>% 
   full_join(temp_covid_pos, by = "mrn") %>%
   full_join(temp_micro, by = "mrn") %>% 
-  replace_na(list(adt_dataset = F, covid_dataset = F, micro_dataset = F))
+  replace_na(list(adt_dataset = F, covid_dataset = F, micro_dataset = F)) %>% 
+  left_join(temp_bmi) %>% 
+  full_join(temp_problems)
   
-rm(temp_deceased_hospice, temp_covid_pos, temp_micro) # don't need this anymore
+rm(temp_deceased_hospice, temp_covid_pos, temp_micro, temp_bmi) # don't need this anymore
 ```
 
 
@@ -243,6 +266,7 @@ adt_long_micro_long_patients <- adt_long %>%
 
 ## adt_long_patients
 
+
 Add covid admission and time in hospital variables
 ```{r}
 adt_long_patients <- adt_long_patients %>% 
@@ -262,6 +286,7 @@ adt_long_patients <- adt_long_patients %>%
         # covid_admission_time_in_hospital is the duration btw admission and discharge for a covid admission. 
 ```
 
+
 temp df will define more specific version of covid admission variable. This is taken from mind_exploratory 10/18/21. Once set up, this can be merged in with adt_long_patient
 ```{r}
 temp <- adt_long_patients %>% 
@@ -279,8 +304,8 @@ temp <- adt_long_patients %>%
          time_since_prev_discharge = replace_na(time_since_prev_discharge, 0), 
              # make 0 if NA, should avoid warnings
          days_since_prev_discharge = time_since_prev_discharge/86400,
-         start_non_covid_admissions_dt = case_when(time_since_prev_discharge > as.duration("2 days") ~ adt_inpatient_dt),
-            # start date of admissions that are not considered to be covid admissions, because > 2 days have elapsed
+         start_non_covid_admissions_dt = case_when(time_since_prev_discharge > as.duration("2 days") & dur_covid_to_inpatient > as.duration("7 days") ~ adt_inpatient_dt),
+            # start date of admissions that are not considered to be covid admissions, because > 2 days have elapsed since previous visit, AND visit starts after -2-7 day window.
          start_non_covid_admissions_dt = min(start_non_covid_admissions_dt, na.rm=T),
          start_non_covid_admissions_dt = na_if(start_non_covid_admissions_dt, -Inf),
              # Establish start of non-covid admissions as inpatient admission dt if there has been a lapse of > 48 hours
@@ -291,11 +316,12 @@ temp <- adt_long_patients %>%
   select(encounter_id, covid_admission2)
 ```
 
-Merge adt_long_patients with temp. temp only adds covid_admission2 variable. 10/18/21
+Merge temp with adt_long_patients: This will add covid_admission2 variable.
 ```{r}
 adt_long_patients <- adt_long_patients %>% 
   left_join(temp)
 ```
+
 
 Checkpoint: There should be a relatively small group of observations with covid_admission2 == T and covid_admission == F. 
 ```{r}
@@ -307,7 +333,6 @@ adt_long_patients %>%
   filter(covid_admission == T, covid_admission2 == F) %>% 
   count()
 ```
-
 
 Make mini dataset from micro_long data:
 - one mrn per patient who has ever had an abnormal result for a bacterial infection
@@ -328,19 +353,23 @@ This is the dataset I originally called "duration of bacteremia". It contains on
 ```{r}
 # make dataset of durations of bacteremia. May want to add certain variables and make sure to keep them through summarize step at a later time.
 bacterial_infections <- micro_long_positives_only %>% 
-  filter(specimen_group == "Blood", encounter_type == "Inpatient") %>% 
+  filter(specimen_group == "Blood") %>% 
+    # 10/25/21 - encounter type is not longer included, so deleted from filter step. Will have to handle elsewhere.
   left_join(adt_long) %>% # We now have one row per micro result x adt record
-  filter(order_dt > adt_inpatient_dt, order_dt < adt_discharge_dt) %>% 
+  filter(collected_dt > adt_inpatient_dt, collected_dt < adt_discharge_dt,
+         !(is.na(adt_inpatient_dt))) %>% 
     # Filter so that we have one row per micro result, with only the relevant adt admission 
     # (the one that overlaps the order date and time) attached
-  select(mrn, abnormal_result_logical, organism_name, organism_category, order_dt, adt_inpatient_dt, adt_discharge_dt, adt_visit) %>% 
+    # Filter adt_inpatient_dt is not NA, to ensure it is inpatient admissions only.
+  select(mrn, abnormal_result_logical, organism_name, organism_category, collected_dt, order_dt, adt_inpatient_dt, adt_discharge_dt, adt_visit) %>% 
   group_by(mrn, adt_visit, organism_name) %>% 
-  arrange(mrn, adt_visit, organism_name, order_dt) %>% 
-  mutate(previous_order_dt = lag(order_dt, n = 1, default = NA),
-         time_since_prev_ord = as.duration(order_dt - previous_order_dt),
-         time_since_prev_ord = replace_na(time_since_prev_ord, 0), # make 0 if NA. Should avoid warnings.
-         max_lapse_in_visit = as.duration(max(time_since_prev_ord)),
-         start_new_infection_dt = case_when(time_since_prev_ord > as.duration("30 days") ~ order_dt),
+  arrange(mrn, adt_visit, organism_name, collected_dt, order_dt) %>% 
+  mutate(collected_dt = as_datetime(collected_dt),
+         previous_collected_dt = lag(collected_dt, n = 1, default = NA),
+         time_since_prev = as.duration(collected_dt - previous_collected_dt),
+         time_since_prev = replace_na(time_since_prev, 0), # make 0 if NA. Should avoid warnings.
+         max_lapse_in_visit = as.duration(max(time_since_prev)),
+         start_new_infection_dt = case_when(time_since_prev > as.duration("30 days") ~ collected_dt),
          start_new_infection_dt = max(start_new_infection_dt, na.rm=T),
          start_new_infection_dt = na_if(start_new_infection_dt, -Inf),
          infection_number = case_when(is.na(start_new_infection_dt) ~ 1, 
@@ -350,8 +379,8 @@ bacterial_infections <- micro_long_positives_only %>%
                                       is.na(start_new_infection_dt)==F & order_dt>=start_new_infection_dt ~ 2)) %>% 
                                       # infection_number is 2 if there was a lapse of 30 days and test took place after lapse.
   group_by(mrn, adt_visit, organism_name, infection_number) %>% # grouping by infection number allows me to separate out separate infections
-  summarize(first_dt = min(order_dt, na.rm = T),
-            last_dt = max(order_dt, na.rm = T),
+  summarize(first_dt = min(collected_dt, na.rm = T),
+            last_dt = max(collected_dt, na.rm = T),
             max_lapse_in_visit = as.duration(max(max_lapse_in_visit, na.rm = T))) %>% 
   mutate(duration_bacteremia = as.duration(last_dt - first_dt)) %>% 
   left_join(patients) %>% 
@@ -373,7 +402,8 @@ bacterial_infections_temp <- bacterial_infections %>%
     # leave out these common contaminants, may want to refine this later.
 
 covid_admissions_bacterial <- adt_long_patients %>% 
-  filter(covid_admission == T) %>% # keep only "covid admissions"
+  filter(covid_admission2 == T) %>% # keep only "covid admissions" based on the covid_admissions2 definition.
+  distinct() %>% # remove duplicates! Like for that one person with enterobacter somthing
   left_join(bacterial_infections_temp, by = c("mrn" = "mrn", "adt_inpatient_dt" = "adt_inpatient_dt")) %>% 
     # join by mrn and by inpatient admission, so each should be matched only with bacterial infections taking place during that inpatient admission.
     mutate(bacterial_infection = case_when(is.na(organism_name) ~ F, is.na(organism_name) == F ~ T))
