@@ -63,13 +63,17 @@ adt_long_patients %>%
   mutate(n_covid_admissions = sum(covid_admission)) %>% 
   filter(n_covid_admissions > 1,
          covid_admission == T) %>% 
-  select(mrn, adt_inpatient_dt, adt_discharge_dt, adt_site, adt_care_level, adt_discharge_disp) %>% 
+  select(mrn, encounter_id, adt_inpatient_dt, adt_discharge_dt, adt_site, adt_care_level, adt_discharge_disp) %>% 
   view()
 ```
 It seems that these multiple inpatients stays either have to do with transfer to a different care level (ICU, hospice, etc), 
 or with multiple stays that are initiated by emergency room visits with the week following covid diagnosis.
 I may want to look for transfers to ICU care that happen later in the trajectory for patients with covid admissions - 
 ie, if they were admitted and then transferred and the transfer shows up as a different line.
+
+See mind exploratory for this part:
+What happens if we consider re-admissions that aren't within the timeframe (48 hrs before covid diagnosis through 7 days after) that would label them a "covid admission", but do occur shortly after a covid discharge, suggesting that they're likely still related to the same health concerns? eg, what if we consider admissions within 48 hrs of previous admission to be part of the same thing?
+
 
 
 # Initial step to set up data for matching:
@@ -87,7 +91,10 @@ matching_df_all_vars <- covid_admissions_bacterial %>%
          age_at_admission = as.numeric((as_date(first_inpatient_dt) - as_date(dob))/365),
          bacterial_infection_ever = replace_na(bacterial_infection_ever, 0),
          bacterial_infection_ever = as.logical(bacterial_infection_ever),
-         covid_and_bacterial_same_admission = replace_na(covid_and_bacterial_same_admission, F), 
+         covid_and_bacterial_same_admission = replace_na(covid_and_bacterial_same_admission, F),
+         combined_race_ethnicity = factor(combined_race_ethnicity, 
+                                          levels = c("White", "BLACK OR AFRICAN AMERICAN", "Hispanic/Latino", "other")),
+         sex = factor(sex, levels = c("male", "female")),
          trt_time = case_when(!(first_bacterial_start_dt == Inf) ~ as.numeric(((first_bacterial_start_dt) - (first_inpatient_dt)) / ddays(1)))) %>% 
   group_by(mrn) %>% arrange(mrn, first_dt) %>% mutate(index = row_number()) %>% 
     # index sets it up for us to choose just one row per mrn (with info for the first infection)
@@ -95,6 +102,11 @@ matching_df_all_vars <- covid_admissions_bacterial %>%
     # Somewhat similar to just using the summarize command, but I wanted to preserve some of the variables that are 
     # available on every row without having to include them explicitly in summarize, so I did it this way.
   filter(index == 1)
+
+
+# set up plot
+# matching_df_all_vars %>% 
+#   geom_line(aes(x = covid_days_in_hospital, color = status) 
 ```
 
 # First attempt at matching - with rsmatch package.
@@ -179,13 +191,15 @@ matching_df_all_vars %>%
   geom_density() +
   labs(title = "Day of covid admission on which bacterial infection first detected", 
        x = "day", y = "density") +
-  xlim(0, 210)
+  xlim(0, 210) 
+
 
 matched_df %>% 
   mutate(treat_control = case_when(type == "trt" ~ "infection", type == "all" ~ "no_infection")) %>% 
   ggplot(aes(x = covid_days_in_hospital, color = treat_control)) +
   geom_density() +
-  labs(title = "Length of covid admissions after preliminary matching")
+  labs(title = "Length of covid admissions after preliminary matching",
+       x = "Length of stay (days)")
 
 #t-test
 ttest <- t.test(x = control_df$covid_days_in_hospital, y = treatment_df$covid_days_in_hospital)
@@ -226,13 +240,40 @@ To do:
 This time, I'll try running the coxph first, then loop through a simple matching algorithm
 
 ## Setup for coxph. 
+
+Check for missingness, since we will get rid of anything with missing variables:
+```{r}
+
+for (v in c("age_at_admission", "sex", "adt_status", "covid_visits_start_date", "combined_race_ethnicity", "insurance_type", "bmi", "dx_ckd", "dx_dm", "dx_htn",  "dx_cad",  "dx_hrt_failure")) {
+  n_missing <- matching_df_all_vars %>% 
+    filter(is.na(v)) %>% 
+    summarize(n = n()) %>% 
+    unlist()
+  print(n_missing)
+}
+matching_df_all_vars %>% ungroup() %>% filter(is.na(age_at_admission)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(sex)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(adt_status)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(covid_visits_start_date)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(combined_race_ethnicity)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(insurance_type)) %>%  summarize(n = n()) #missing 333
+matching_df_all_vars %>% ungroup() %>% filter(is.na(bmi)) %>%  summarize(n = n()) # - many bmi missing missing 589
+matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_ckd)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_dm)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_htn)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_cad)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_hrt_failure)) %>%  summarize(n = n())
+
+```
+
+
 In this code chunk, we add a time variable, and exclude cases that have any missing values. This may need to be amended later, but should work for the moment.(9/10/21)
 ```{r}
 coxph_df <- matching_df_all_vars %>% 
   mutate(time = case_when(is.na(trt_time) == F ~ trt_time, #time is time of bacterial infection (trt_time) if there was one
                           is.na(trt_time) == T ~ covid_days_in_hospital), # time is censoring time (days in hospital) if there wasn't an infection
          status = !is.na(trt_time)) %>% # status is F if there is not an infection ( and therefore no "treatment time", and T if there was an infection)
-  filter(any(is.na(age_at_admission), is.na(sex), is.na(adt_status), is.na(covid_visits_start_date), is.na(combined_race_ethnicity), is.na(insurance_type), is.na(time), is.na(status)) == F) 
+  filter(any(is.na(age_at_admission), is.na(sex), is.na(adt_status), is.na(covid_visits_start_date), is.na(combined_race_ethnicity), is.na(bmi), is.na(dx_ckd), is.na(dx_dm), is.na(dx_htn), is.na(dx_cad), is.na(dx_hrt_failure), is.na(time), is.na(status)) == F) 
 
 # filter out anything with a missing value for any of our predictor variables, or with a missing value for the status or time value, for the time being.
 ```
@@ -250,11 +291,11 @@ coxph_df %>%
 
 ## Set up cox model:
 ```{r}
-coxph_model <- coxph(Surv(time, status) ~ age_at_admission + sex + adt_status + covid_visits_start_date + combined_race_ethnicity + insurance_type,
+coxph_model <- coxph(Surv(time, status) ~ age_at_admission + sex + adt_status + covid_visits_start_date + combined_race_ethnicity + bmi + dx_dm + dx_htn + dx_cad +dx_hrt_failure,
                data = coxph_df)
 
 coxph_model %>% 
-  gtsummary::tbl_regression(exp = TRUE)
+  gtsummary::tbl_regression(exp = TRUE, estimate_fun = function(x) style_ratio(x, digits = 4))
 # Of course I should add quite a few other variables here - however, I think for the moment, I'll leave like this just to make sure I can set this up to run properly. 
 
 propensity <- predict(coxph_model, type = "risk", x = coxph_df)
@@ -369,25 +410,15 @@ case with the real data.
 
 ```{r}
 # make subsets of data to use for t-tests (there's surely a quicker way, but this should work)
-infected <- coxph_df %>% filter(status == T)
+infected <- matches %>% select(mrn:covid_days_in_hospital)
 all_uninfected <- coxph_df %>% filter(status == F)
-controls <- matched_ppl_df %>% filter(status == F)
+controls <- matches %>% select(ctrl_mrn:ctrl_covid_days_in_hospital)
+  
 
 # unmatched sample:
-coxph_df %>% 
-  group_by(status) %>% 
-  summarize(mean_days_in_hosp = mean(covid_days_in_hospital),
-            sd_days_in_hosp = sd(covid_days_in_hospital))
-
-t.test(x = infected$covid_days_in_hospital, y = all_uninfected$covid_days_in_hospital)
-
+t.test(x = infected$covid_days_in_hospital, y = all_uninfected$covid_days_in_hospital) 
 # matched sample:
-matched_ppl_df %>% 
-  group_by(status) %>% 
-  summarize(mean_days_in_hosp = mean(covid_days_in_hospital),
-            sd_days_in_hosp = sd(covid_days_in_hospital))
-
-t.test(x = infected$covid_days_in_hospital, y = controls$covid_days_in_hospital)
+t.test(x = infected$covid_days_in_hospital, y = controls$ctrl_covid_days_in_hospital)
 
 # i think we're actually supposed to use a paired sample t-test (following watson et al for this)
 matches %>% mutate(diff = covid_days_in_hospital - ctrl_covid_days_in_hospital) %>% 
@@ -397,13 +428,89 @@ matches %>% mutate(diff = covid_days_in_hospital - ctrl_covid_days_in_hospital) 
 
 Plot results:
 ```{r}
-matched_people_df %>% 
-  mutate(treat_control = case_when(type == "trt" ~ "infection", type == "all" ~ "no_infection")) %>% 
-  ggplot(aes(x = covid_days_in_hospital, color = treat_control)) +
-  geom_density() +
-  labs(title = "Length of covid admissions after preliminary matching")
+matches %>% 
+  ggplot(aes(x = covid_days_in_hospital)) +
+  geom_density(color = "blue") +
+  geom_density(aes(x = ctrl_covid_days_in_hospital), color = "red") +
+  labs(title = "Length of covid admissions after preliminary matching", 
+       x = "Length of stay (days)")
 ```
 
+## Now, consider only never-infected people as controls:
 
+Set up "risk set" dataframe, which will include ONLY UNINFECTED people
+```{r}
+riskset2 <- tibble(coxph_df, propensity) %>% 
+  select(mrn, status, propensity, time, covid_days_in_hospital) %>% 
+  filter(status == F)
+
+infected2 <- tibble(coxph_df, propensity) %>% 
+  select(mrn, status, propensity, time, covid_days_in_hospital) %>% 
+  filter(status == T)
+```
+
+Set up dataframe of infection times with space for output:
+```{r}
+matches2 <- infected2 %>% 
+  select(mrn, propensity, time, status, covid_days_in_hospital) %>% 
+  arrange(time) %>% 
+  mutate(ctrl_mrn = NA, ctrl_propensity = NA, ctrl_time = NA, ctrl_status = NA, ctrl_covid_days_in_hospital = NA)
+```
+
+Now run the matching process:
+```{r}
+for(i in 1:nrow(matches2)) {
+  # pick control among eligible riskset based on propensity
+  temp <- riskset2 %>% 
+    filter(time >= matches2$time[i], # riskset only includes those still at risk
+           mrn != matches2$mrn[i]) %>% # and not infection we're trying to match
+    mutate(propensity_difference = abs(propensity - matches2$propensity[i])) %>% 
+    filter(propensity_difference == min(propensity_difference))
+      # keep control with closest risk to the infection we're matching
+  
+  # plug info about control into matches df
+  matches2$ctrl_mrn[i] <- temp$mrn[1]
+  matches2$ctrl_propensity[i] <- temp$propensity[1]
+  matches2$ctrl_time[i] <- temp$time[1]
+  matches2$ctrl_status[i] <- temp$status[1]
+  matches2$ctrl_covid_days_in_hospital[i] <- temp$covid_days_in_hospital[1]
+  
+  # save new riskset excluding the control that was just matched 
+  riskset2 <- riskset2 %>% filter(mrn!=temp$mrn[1])
+}
+```
+
+## Look at results using matches2:
+
+# Look at results:
+
+```{r}
+# make subsets of data to use for t-tests (there's surely a quicker way, but this should work)
+# infected <- matches %>% select(mrn:covid_days_in_hospital)
+# all_uninfected <- coxph_df %>% filter(status == F)
+controls2 <- matches2 %>% select(ctrl_mrn:ctrl_covid_days_in_hospital) 
+  
+
+# unmatched sample:
+t.test(x = infected$covid_days_in_hospital, y = all_uninfected$covid_days_in_hospital)
+
+# matched sample:
+t.test(x = infected$covid_days_in_hospital, y = controls2$ctrl_covid_days_in_hospital)
+
+# i think we're actually supposed to use a paired sample t-test (following watson et al for this)
+matches2 %>% mutate(diff = covid_days_in_hospital - ctrl_covid_days_in_hospital) %>% 
+  pull(diff) %>% # pick 
+  t.test()
+```
+
+Plot results:
+```{r}
+matches2 %>% 
+  ggplot(aes(x = covid_days_in_hospital)) +
+  geom_density(color = "blue") +
+  geom_density(aes(x = ctrl_covid_days_in_hospital), color = "red") +
+  labs(title = "Length of admissions after prelim matching - only uninfected controls", 
+       x = "Length of stay (days)")
+```
 
 
