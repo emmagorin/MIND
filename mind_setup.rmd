@@ -348,49 +348,76 @@ micro_long_positives_only <- micro_long %>%
 
 ## Bacterial infections
 
-This is the dataset I originally called "duration of bacteremia". It contains one observation per infection for blbacterial infections from the micro dataset.
+This section should make several datasets:
+- bacterial_infections_blood: one line per blood bacterial infection taking place during inpatient stay
+- bacterial_infections_urine: one line per urine bacterial infection taking place during inpatient stay
+- bacterial_infections_rest: one line per respiratory bacterial infection taking place during inpatient stay
+- covid_admissions_bact_blood: one line per covid inpatient stay, per blood bacterial infection during that stay
+- covid_admissions_bact_urine: one line per covid inpatient stay, per urine bacterial infection during that stay
+- covid_admissions_bact_resp: one line per covid inpatient stay, per respiratory bacterial infection during that stay
 
-
+Set up functions that will make the datasets:
 ```{r}
-# make dataset of blood bacterial infections:
-bacterial_infections <- micro_long_positives_only %>% 
-  filter(specimen_group == "Blood") %>% 
-  left_join(adt_long) %>% # We now have one row per micro result x adt record
-  mutate(collected_or_order_dt = pmin(collected_dt, order_dt, na.rm = T)) %>% 
-    # Some of the records have order_dt, others have collected_dt. This should give us the one that's non-missing or the earlier of the two.
-  filter(collected_or_order_dt > adt_inpatient_dt, collected_or_order_dt < adt_discharge_dt,
-         !(is.na(adt_inpatient_dt))) %>% 
-    # Filter so that we have one row per micro result, with only the relevant adt admission 
-    # (the one that overlaps the order date and time) attached
-    # Filter adt_inpatient_dt is not NA, to ensure it is inpatient admissions only.
-  select(mrn, abnormal_result_logical, organism_name, organism_category, collected_or_order_dt, collected_dt, order_dt, adt_inpatient_dt, adt_discharge_dt, adt_visit) %>% 
-  group_by(mrn, adt_visit, organism_name) %>% 
-  arrange(mrn, adt_visit, organism_name, collected_or_order_dt) %>% 
-  mutate(ccollected_or_order_dt = as_datetime(collected_or_order_dt),
-         previous_collected_or_order_dt = lag(collected_or_order_dt, n = 1, default = NA),
-         time_since_prev = as.duration(collected_or_order_dt - previous_collected_or_order_dt),
-         time_since_prev = replace_na(time_since_prev, 0), # make 0 if NA. Should avoid warnings.
-         max_lapse_in_visit = as.duration(max(time_since_prev)),
-         start_new_infection_dt = case_when(time_since_prev > as.duration("30 days") ~ collected_or_order_dt),
-         start_new_infection_dt = max(start_new_infection_dt, na.rm=T),
-         start_new_infection_dt = na_if(start_new_infection_dt, -Inf),
-         infection_number = case_when(is.na(start_new_infection_dt) ~ 1, 
-                                      # infection_number is 1 if there was never a lapse of >30 days
-                                      is.na(start_new_infection_dt)==F & collected_or_order_dt < start_new_infection_dt ~ 1, 
-                                      # infection_number is 1 if there was a lapse of 30 days and this test took place before lapse
-                                      is.na(start_new_infection_dt)==F & collected_or_order_dt >= start_new_infection_dt ~ 2)) %>% 
-                                      # infection_number is 2 if there was a lapse of 30 days and test took place after lapse.
-  group_by(mrn, adt_visit, organism_name, infection_number) %>% # grouping by infection number allows me to separate out separate infections
-  summarize(first_dt = min(collected_or_order_dt, na.rm = T),
-            last_dt = max(collected_or_order_dt, na.rm = T),
-            max_lapse_in_visit = as.duration(max(max_lapse_in_visit, na.rm = T))) %>% 
-  mutate(duration_bacteremia = as.duration(last_dt - first_dt)) %>% 
-  left_join(patients) %>% 
-  left_join(adt_long) %>% # We now have one row per micro result x adt record
-  filter(first_dt > adt_inpatient_dt, first_dt < adt_discharge_dt) %>% 
-    # repeat this step from the beginning so we have all the data from patients and adt available.
-    mutate(covid_and_bacterial_same_admission = (covid_pos_dt >= (adt_event_dt - as.duration("48 hours")) & covid_pos_dt <= adt_discharge_dt),
-           covid_and_bacterial_same_admission = replace_na(covid_and_bacterial_same_admission, F))
+set_up_bacterial_infections_df <- function(input_df, output_df) {
+  # make dataset of blood bacterial infections:
+  output_df <- input_df %>% 
+    filter(specimen_group == "Blood") %>% 
+    left_join(adt_long) %>% # We now have one row per micro result x adt record
+    mutate(collected_or_order_dt = pmin(collected_dt, order_dt, na.rm = T)) %>% 
+      # Some of the records have order_dt, others have collected_dt. This should give us the one that's non-missing or the earlier of the two.
+    filter(collected_or_order_dt > adt_inpatient_dt, collected_or_order_dt < adt_discharge_dt,
+           !(is.na(adt_inpatient_dt))) %>% 
+      # Filter so that we have one row per micro result, with only the relevant adt admission 
+      # (the one that overlaps the order date and time) attached
+      # Filter adt_inpatient_dt is not NA, to ensure it is inpatient admissions only.
+    select(mrn, abnormal_result_logical, organism_name, organism_category, collected_or_order_dt, collected_dt, order_dt, adt_inpatient_dt, adt_discharge_dt, adt_visit) %>% 
+    group_by(mrn, adt_visit, organism_name) %>% 
+    arrange(mrn, adt_visit, organism_name, collected_or_order_dt) %>% 
+    mutate(ccollected_or_order_dt = as_datetime(collected_or_order_dt),
+           previous_collected_or_order_dt = lag(collected_or_order_dt, n = 1, default = NA),
+           time_since_prev = as.duration(collected_or_order_dt - previous_collected_or_order_dt),
+           time_since_prev = replace_na(time_since_prev, 0), # make 0 if NA. Should avoid warnings.
+           max_lapse_in_visit = as.duration(max(time_since_prev)),
+           start_new_infection_dt = case_when(time_since_prev > as.duration("30 days") ~ collected_or_order_dt),
+           start_new_infection_dt = max(start_new_infection_dt, na.rm=T),
+           start_new_infection_dt = na_if(start_new_infection_dt, -Inf),
+           infection_number = case_when(is.na(start_new_infection_dt) ~ 1, 
+                                        # infection_number is 1 if there was never a lapse of >30 days
+                                        is.na(start_new_infection_dt)==F & collected_or_order_dt < start_new_infection_dt ~ 1, 
+                                        # infection_number is 1 if there was a lapse of 30 days and this test took place before lapse
+                                        is.na(start_new_infection_dt)==F & collected_or_order_dt >= start_new_infection_dt ~ 2)) %>% 
+                                        # infection_number is 2 if there was a lapse of 30 days and test took place after lapse.
+    group_by(mrn, adt_visit, organism_name, infection_number) %>% # grouping by infection number allows me to separate out separate infections
+    summarize(first_dt = min(collected_or_order_dt, na.rm = T),
+              last_dt = max(collected_or_order_dt, na.rm = T),
+              max_lapse_in_visit = as.duration(max(max_lapse_in_visit, na.rm = T))) %>% 
+    mutate(duration_bacteremia = as.duration(last_dt - first_dt)) %>% 
+    left_join(patients) %>% 
+    left_join(adt_long) %>% # We now have one row per micro result x adt record
+    filter(first_dt > adt_inpatient_dt, first_dt < adt_discharge_dt) %>% 
+      # repeat this step from the beginning so we have all the data from patients and adt available.
+      mutate(covid_and_bacterial_same_admission = (covid_pos_dt >= (adt_event_dt - as.duration("48 hours")) & covid_pos_dt <= adt_discharge_dt),
+             covid_and_bacterial_same_admission = replace_na(covid_and_bacterial_same_admission, F))
+}
+
+set_up_covid_admissions_bact_df <- function(input_df, output_df) {
+    #first, set up bacterial infections dataset:
+  bacterial_infections_temp <- input_df %>% 
+    select(mrn, adt_visit, organism_name, first_dt, last_dt, max_lapse_in_visit, duration_bacteremia,
+           adt_inpatient_dt, covid_and_bacterial_same_admission) %>% 
+    filter(organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS")
+  
+  output_df <- adt_long_patients %>% 
+  filter(covid_admission2 == T) %>% # keep only "covid admissions" based on the covid_admissions2 definition.
+  distinct() %>% # remove duplicates! Like for that one person with enterobacter
+  left_join(bacterial_infections_temp, by = c("mrn" = "mrn", "adt_inpatient_dt" = "adt_inpatient_dt")) %>% 
+    # join by mrn and by inpatient admission, so each should be matched only with bacterial infections taking place during that inpatient admission.
+    mutate(bacterial_infection = case_when(is.na(organism_name) ~ F, is.na(organism_name) == F ~ T))
+    # bacterial infection is true if the observation has a bacterial infection, false otherwise.
+    # kind of the same as covid_and_bacterial_same_admission, may want to simplify later.
+
+  rm(bacterial_infections_temp)
+}
 ```
 
 
@@ -407,7 +434,7 @@ bacterial_infections_temp <- bacterial_infections %>%
 
 covid_admissions_bacterial <- adt_long_patients %>% 
   filter(covid_admission2 == T) %>% # keep only "covid admissions" based on the covid_admissions2 definition.
-  distinct() %>% # remove duplicates! Like for that one person with enterobacter somthing
+  distinct() %>% # remove duplicates! Like for that one person with enterobacter
   left_join(bacterial_infections_temp, by = c("mrn" = "mrn", "adt_inpatient_dt" = "adt_inpatient_dt")) %>% 
     # join by mrn and by inpatient admission, so each should be matched only with bacterial infections taking place during that inpatient admission.
     mutate(bacterial_infection = case_when(is.na(organism_name) ~ F, is.na(organism_name) == F ~ T))
