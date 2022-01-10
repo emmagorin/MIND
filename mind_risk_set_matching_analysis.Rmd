@@ -193,6 +193,43 @@ matching_df_all_vars <- df %>%
   filter(index == 1)
 ```
 
+INDIVIDUAL PATHOGEN VERSION:
+
+```{r}
+matching_df_all_vars <- df %>% 
+  group_by(mrn) %>% 
+  mutate(first_inpatient_dt = min(adt_inpatient_dt),
+         last_discharge_dt = max(adt_discharge_dt),
+         covid_time_in_hospital = last_discharge_dt - first_inpatient_dt,
+         covid_days_in_hospital = covid_time_in_hospital / ddays(1),
+         first_bacterial_start_dt = min(first_dt, na.rm = T),
+         age_at_admission = as.numeric((as_date(first_inpatient_dt) - as_date(dob))/365.25),
+         bacterial_infection_ever = replace_na(bacterial_infection_ever, 0),
+         bacterial_infection_ever = as.logical(bacterial_infection_ever),
+         covid_and_bacterial_same_admission = replace_na(covid_and_bacterial_same_admission, F),
+         combined_race_ethnicity = factor(combined_race_ethnicity, 
+                                          levels = c("White", "BLACK OR AFRICAN AMERICAN", "Hispanic/Latino", "other")),
+         sex = factor(sex, levels = c("male", "female")),
+         path_of_interest_dt = ifelse(organism_name == path, first_dt, NA),
+         first_path_of_interest_dt = min(path_of_interest_dt),
+         prior_infection_at_site = ifelse(is.na(first_path_of_interest_dt), NA, (first_bacterial_start_dt < first_path_of_interest_dt)),
+
+# Note 1/5: The above is interesting to explore, and should show us whether ppl who have the pathogen have previously had another infection. However, can't really include this in this way in the coxph model - what would be the time threshold for the controls? I think I'll have to incorporate this as a time-varying covariate....
+
+
+         trt_time = case_when(!(first_bacterial_start_dt == Inf) ~ as.numeric(((first_bacterial_start_dt) - (first_inpatient_dt)) / ddays(1)))) %>% 
+  
+  group_by(mrn) %>% arrange(mrn, first_dt) %>% mutate(index = row_number()) %>% 
+  # Note 1/5: adjust above line so that we're keeping the appropriate line (first instance of given pathogen)
+  
+    # index sets it up for us to choose just one row per mrn (with info for the first infection)
+    # This gets rid of duplicate rows per mrn because of duplicate admissions or duplicate bacterial infections
+    # Somewhat similar to just using the summarize command, but I wanted to preserve some of the variables that are 
+    # available on every row without having to include them explicitly in summarize, so I did it this way.
+  #filter(index == 1)
+```
+
+
 Set up dataframe to record results:
 ```{r}
 ttest_output <- tibble(sample = c("unmatched", "matched", "matched - uninfected controls only"), 
