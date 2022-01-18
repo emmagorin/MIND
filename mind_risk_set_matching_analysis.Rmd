@@ -165,7 +165,7 @@ df %>%
        x = "Length of stay (days)")
 ```
 
-# Initial step to set up data for matching:
+# Initial steps to set up data for matching:
 
 First step of setting up data for matching:
 8/6 - to do: update some of these to match "working with dates" instructions from https://www.emilyzabor.com/tutorials/survival_analysis_in_r_tutorial.html#Part_1:_Introduction_to_Survival_Analysis
@@ -227,9 +227,45 @@ matching_df_all_vars <- df %>%
     # Somewhat similar to just using the summarize command, but I wanted to preserve some of the variables that are 
     # available on every row without having to include them explicitly in summarize, so I did it this way.
   #filter(index == 1)
+  
+
+# Step 1: set up dataframe with just MRN, time-invarying covariates, time of censoring or event, and event 1 or 0 (where event is onset of infection with path of interest)
+
+path_of_interest <- df %>% 
+  group_by(mrn) %>% 
+  mutate(first_inpatient_dt = min(adt_inpatient_dt),
+         age_at_admission = as.numeric((as_date(first_inpatient_dt) - as_date(dob))/365.25),
+         combined_race_ethnicity = factor(combined_race_ethnicity, 
+                                          levels = c("White", "BLACK OR AFRICAN AMERICAN", "Hispanic/Latino", "other")),
+         sex = factor(sex, levels = c("male", "female")),
+         path_of_interest_dt = ifelse(organism_name == path, first_dt, NA),
+         first_path_of_interest_dt = min(path_of_interest_dt),
+         time = case_when(!(first_oath_of_interest_dt == Inf) ~ as.numeric(((first_oath_of_interest_dt) - (first_inpatient_dt)) / ddays(1)))) %>% # surely can make it so this doesn't have infs. 
+  # somehow filter so for ppl who have path of interest, other pathogens aren't included........... or mauybe don't need to ???
+  
+  
+  
+  
+  group_by(mrn) %>% arrange(mrn, first_dt) %>% mutate(index = row_number()) %>% 
+  
+  # add select to minimize unnecessary columns
+
+# Step 2: set up dataframe with one row per MRN, time = 0 and other infection = 0
+
+# Step 3: set up dataframe with just MRN, time of onset of other infection (that's not path of interest) and other_infection = 1 (since we're only keeping lines that do have another infection with a different pathogen)
+
+# Step 4: combine 2 and 3
+
+# step 5: make a similar thing but with ICU stays
+
+# step 6: use tmerge on 1,4 and 5 to set up data for coxph. 
+  
+
+# step 7???? might need to set up the rest of the matching df (like, time in hospital, etc) to use for the matching step later. 
 ```
 
 
+## Results DF
 Set up dataframe to record results:
 ```{r}
 ttest_output <- tibble(sample = c("unmatched", "matched", "matched - uninfected controls only"), 
