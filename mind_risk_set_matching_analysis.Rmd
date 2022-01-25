@@ -196,59 +196,39 @@ matching_df_all_vars <- df %>%
 INDIVIDUAL PATHOGEN VERSION:
 
 ```{r}
-matching_df_all_vars <- df %>% 
-  group_by(mrn) %>% 
-  mutate(first_inpatient_dt = min(adt_inpatient_dt),
-         last_discharge_dt = max(adt_discharge_dt),
-         covid_time_in_hospital = last_discharge_dt - first_inpatient_dt,
-         covid_days_in_hospital = covid_time_in_hospital / ddays(1),
-         first_bacterial_start_dt = min(first_dt, na.rm = T),
-         age_at_admission = as.numeric((as_date(first_inpatient_dt) - as_date(dob))/365.25),
-         bacterial_infection_ever = replace_na(bacterial_infection_ever, 0),
-         bacterial_infection_ever = as.logical(bacterial_infection_ever),
-         covid_and_bacterial_same_admission = replace_na(covid_and_bacterial_same_admission, F),
-         combined_race_ethnicity = factor(combined_race_ethnicity, 
-                                          levels = c("White", "BLACK OR AFRICAN AMERICAN", "Hispanic/Latino", "other")),
-         sex = factor(sex, levels = c("male", "female")),
-         path_of_interest_dt = ifelse(organism_name == path, first_dt, NA),
-         first_path_of_interest_dt = min(path_of_interest_dt),
-         prior_infection_at_site = ifelse(is.na(first_path_of_interest_dt), NA, (first_bacterial_start_dt < first_path_of_interest_dt)),
-
-# Note 1/5: The above is interesting to explore, and should show us whether ppl who have the pathogen have previously had another infection. However, can't really include this in this way in the coxph model - what would be the time threshold for the controls? I think I'll have to incorporate this as a time-varying covariate....
-
-
-         trt_time = case_when(!(first_bacterial_start_dt == Inf) ~ as.numeric(((first_bacterial_start_dt) - (first_inpatient_dt)) / ddays(1)))) %>% 
-  
-  group_by(mrn) %>% arrange(mrn, first_dt) %>% mutate(index = row_number()) %>% 
-  # Note 1/5: adjust above line so that we're keeping the appropriate line (first instance of given pathogen)
-  
-    # index sets it up for us to choose just one row per mrn (with info for the first infection)
-    # This gets rid of duplicate rows per mrn because of duplicate admissions or duplicate bacterial infections
-    # Somewhat similar to just using the summarize command, but I wanted to preserve some of the variables that are 
-    # available on every row without having to include them explicitly in summarize, so I did it this way.
-  #filter(index == 1)
-  
 
 # Step 1: set up dataframe with just MRN, time-invarying covariates, time of censoring or event, and event 1 or 0 (where event is onset of infection with path of interest)
 
 path_of_interest <- df %>% 
   group_by(mrn) %>% 
-  mutate(first_inpatient_dt = min(adt_inpatient_dt),
+  mutate(first_inpatient_dt = as_datetime(min(adt_inpatient_dt)), # beginning of hospital stay
+         last_discharge_dt = as_datetime(max(adt_discharge_dt)), # end of hospital stay
          age_at_admission = as.numeric((as_date(first_inpatient_dt) - as_date(dob))/365.25),
          combined_race_ethnicity = factor(combined_race_ethnicity, 
                                           levels = c("White", "BLACK OR AFRICAN AMERICAN", "Hispanic/Latino", "other")),
          sex = factor(sex, levels = c("male", "female")),
          path_of_interest_dt = ifelse(organism_name == path, first_dt, NA),
-         first_path_of_interest_dt = min(path_of_interest_dt),
-         time = case_when(!(first_oath_of_interest_dt == Inf) ~ as.numeric(((first_oath_of_interest_dt) - (first_inpatient_dt)) / ddays(1)))) %>% # surely can make it so this doesn't have infs. 
-  # somehow filter so for ppl who have path of interest, other pathogens aren't included........... or mauybe don't need to ???
+         # path_of_interest_dt: date of detection of infection with the pathogen of interest, na if not pathogen of interest
+         first_path_of_interest_dt = ifelse(all(is.na(path_of_interest_dt)), NA, as_datetime(min(path_of_interest_dt, na.rm = T))),
+         # first_path_of_interest_dt: date of first detection of path of interest if patient ever had pathogen of interest
+         test1 = last_discharge_dt - first_inpatient_dt,
+         test2 = first_path_of_interest_dt - first_inpatient_dt,
+         #test2 = ifelse(is.na(first_path_of_interest_dt), NA, first_path_of_interest_dt - first_inpatient_dt),
+        # time = ifelse(is.na(first_path_of_interest_dt),
+         #              as.numeric(((last_discharge_dt) - (first_inpatient_dt)) / ddays(1)),
+         #              as.numeric(((first_path_of_interest_dt) - (first_inpatient_dt)) / ddays(1))),
+         # time: time until event if patient had one (detection of pathogen of interest) OR censoring (discharge from hospital)
+         event = !is.na(path_of_interest_dt)) %>% 
   
+
+  ## 1/18/22: something's not working, that's why i made "test" vars, i dunno, fuck it
   
-  
-  
-  group_by(mrn) %>% arrange(mrn, first_dt) %>% mutate(index = row_number()) %>% 
-  
-  # add select to minimize unnecessary columns
+  arrange(mrn, first_dt) %>% mutate(index = row_number()) %>% filter(index == 1) %>% 
+    # index sets it up for us to choose just one row per mrn, which should include all information we need.
+    # This gets rid of duplicate rows per mrn because of duplicate admissions or duplicate bacterial infections
+    # Somewhat similar to just using the summarize command, but I wanted to preserve some of the variables that are 
+    # available on every row without having to include them explicitly in summarize, so I did it this way.
+  select(mrn, first_inpatient_dt, last_discharge_dt, age_at_admission, combined_race_ethnicity, sex, first_path_of_interest_dt, time, event)
 
 # Step 2: set up dataframe with one row per MRN, time = 0 and other infection = 0
 
