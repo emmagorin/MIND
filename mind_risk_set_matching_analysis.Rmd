@@ -207,22 +207,17 @@ path_of_interest <- df %>%
          combined_race_ethnicity = factor(combined_race_ethnicity, 
                                           levels = c("White", "BLACK OR AFRICAN AMERICAN", "Hispanic/Latino", "other")),
          sex = factor(sex, levels = c("male", "female")),
-         path_of_interest_dt = ifelse(organism_name == path, first_dt, NA),
+         test = first_dt,
+         path_of_interest_dt = ifelse(organism_name == path, as_datetime(first_dt), NA),
          # path_of_interest_dt: date of detection of infection with the pathogen of interest, na if not pathogen of interest
-         first_path_of_interest_dt = ifelse(all(is.na(path_of_interest_dt)), NA, as_datetime(min(path_of_interest_dt, na.rm = T))),
+         first_path_of_interest_dt = ifelse(!(all(is.na(path_of_interest_dt))), as_datetime(min(path_of_interest_dt, na.rm = T)), NA),
+         first_path_of_interest_dt = as_datetime(first_path_of_interest_dt),
          # first_path_of_interest_dt: date of first detection of path of interest if patient ever had pathogen of interest
-         test1 = last_discharge_dt - first_inpatient_dt,
-         test2 = first_path_of_interest_dt - first_inpatient_dt,
-         #test2 = ifelse(is.na(first_path_of_interest_dt), NA, first_path_of_interest_dt - first_inpatient_dt),
-        # time = ifelse(is.na(first_path_of_interest_dt),
-         #              as.numeric(((last_discharge_dt) - (first_inpatient_dt)) / ddays(1)),
-         #              as.numeric(((first_path_of_interest_dt) - (first_inpatient_dt)) / ddays(1))),
+         time = ifelse(is.na(first_path_of_interest_dt),
+                       as.numeric(((last_discharge_dt) - (first_inpatient_dt)) / ddays(1)),
+                       as.numeric(((first_path_of_interest_dt) - (first_inpatient_dt)) / ddays(1))),
          # time: time until event if patient had one (detection of pathogen of interest) OR censoring (discharge from hospital)
-         event = !is.na(path_of_interest_dt)) %>% 
-  
-
-  ## 1/18/22: something's not working, that's why i made "test" vars, i dunno, fuck it
-  
+         event = !is.na(path_of_interest_dt)) %>%
   arrange(mrn, first_dt) %>% mutate(index = row_number()) %>% filter(index == 1) %>% 
     # index sets it up for us to choose just one row per mrn, which should include all information we need.
     # This gets rid of duplicate rows per mrn because of duplicate admissions or duplicate bacterial infections
@@ -230,9 +225,25 @@ path_of_interest <- df %>%
     # available on every row without having to include them explicitly in summarize, so I did it this way.
   select(mrn, first_inpatient_dt, last_discharge_dt, age_at_admission, combined_race_ethnicity, sex, first_path_of_interest_dt, time, event)
 
-# Step 2: set up dataframe with one row per MRN, time = 0 and other infection = 0
+# 1/25/22: Will want to add in other baseline variables at some point. 
 
-# Step 3: set up dataframe with just MRN, time of onset of other infection (that's not path of interest) and other_infection = 1 (since we're only keeping lines that do have another infection with a different pathogen)
+# Step 2: set up dataframe with one row per MRN, time = 0 and other infection = 0
+step_2 <- df %>% 
+  group_by(mrn) %>% 
+  mutate(index = row_number()) %>% filter(index == 1) %>% 
+  select(mrn) %>% # This is just a list of mrns at this point!
+  mutate(time = 0,
+         other_infection = 0)
+# is this step necessary? It's a question.....
+
+# Step 3: set up dataframe with just MRN, time of onset of other infection (that's not path of interest) and other_infection = 1 (since we're only keeping lines that do have another infection with a different pathogen) - or variation that Jeff suggested, with categories 1-5 for five days after other infection was detected.
+step_3 <- df %>% 
+  group_by(mrn) %>% 
+  mutate(other_infection_dt = ifelse((organism_name!=path & !is.na(organism_name)), as_datetime(first_dt), NA),
+         other_infection_dt = as_datetime(other_infection_dt))
+
+# ok, this is a good start: to make it fit with Jeff's suggestion, will need to add rows for 5 days after infection, basically, then merge all with step 3. These will be categorical variables that are analyzed as separate vars.....
+# will require some setting up.
 
 # Step 4: combine 2 and 3
 
