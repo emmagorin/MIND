@@ -196,7 +196,6 @@ matching_df_all_vars <- df %>%
 INDIVIDUAL PATHOGEN VERSION:
 
 ```{r}
-
 # Step 1: set up dataframe with just MRN, time-invarying covariates, time of censoring or event, and event 1 or 0 (where event is onset of infection with path of interest)
 
 path_of_interest <- df %>% 
@@ -207,16 +206,16 @@ path_of_interest <- df %>%
          combined_race_ethnicity = factor(combined_race_ethnicity, 
                                           levels = c("White", "BLACK OR AFRICAN AMERICAN", "Hispanic/Latino", "other")),
          sex = factor(sex, levels = c("male", "female")),
-         test = first_dt,
+         #test = first_dt, 2/24 - not sure we need this line, think this was actually a test.
          path_of_interest_dt = ifelse(organism_name == path, as_datetime(first_dt), NA),
-         # path_of_interest_dt: date of detection of infection with the pathogen of interest, na if not pathogen of interest
+             # path_of_interest_dt: date of detection of infection with the pathogen of interest, na if not pathogen of interest
          first_path_of_interest_dt = ifelse(!(all(is.na(path_of_interest_dt))), as_datetime(min(path_of_interest_dt, na.rm = T)), NA),
          first_path_of_interest_dt = as_datetime(first_path_of_interest_dt),
-         # first_path_of_interest_dt: date of first detection of path of interest if patient ever had pathogen of interest
+             # first_path_of_interest_dt: date of first detection of path of interest if patient ever had pathogen of interest
          time = ifelse(is.na(first_path_of_interest_dt),
                        as.numeric(((last_discharge_dt) - (first_inpatient_dt)) / ddays(1)),
                        as.numeric(((first_path_of_interest_dt) - (first_inpatient_dt)) / ddays(1))),
-         # time: time until event if patient had one (detection of pathogen of interest) OR censoring (discharge from hospital)
+             # time: time until event if patient had one (detection of pathogen of interest) OR censoring (discharge from hospital)
          event = !is.na(path_of_interest_dt)) %>%
   arrange(mrn, first_dt) %>% mutate(index = row_number()) %>% filter(index == 1) %>% 
     # index sets it up for us to choose just one row per mrn, which should include all information we need.
@@ -224,7 +223,7 @@ path_of_interest <- df %>%
     # Somewhat similar to just using the summarize command, but I wanted to preserve some of the variables that are 
     # available on every row without having to include them explicitly in summarize, so I did it this way.
   select(mrn, first_inpatient_dt, last_discharge_dt, age_at_admission, combined_race_ethnicity, sex, first_path_of_interest_dt, time, event)
-
+ 
 # 1/25/22: Will want to add in other baseline variables at some point. 
 
 # Step 2: set up dataframe with one row per MRN, time = 0 and other infection = 0
@@ -237,13 +236,65 @@ step_2 <- df %>%
 # is this step necessary? It's a question.....
 
 # Step 3: set up dataframe with just MRN, time of onset of other infection (that's not path of interest) and other_infection = 1 (since we're only keeping lines that do have another infection with a different pathogen) - or variation that Jeff suggested, with categories 1-5 for five days after other infection was detected.
-step_3 <- df %>% 
-  group_by(mrn) %>% 
-  mutate(other_infection_dt = ifelse((organism_name!=path & !is.na(organism_name)), as_datetime(first_dt), NA),
-         other_infection_dt = as_datetime(other_infection_dt))
 
-# ok, this is a good start: to make it fit with Jeff's suggestion, will need to add rows for 5 days after infection, basically, then merge all with step 3. These will be categorical variables that are analyzed as separate vars.....
-# will require some setting up.
+# step 3a: set up variables with times of other infections through 1 day after last positive test.
+step_3a <- df %>% 
+  #group_by(mrn) %>% 
+  mutate(start = ifelse((organism_name!=path & !is.na(organism_name)), as_datetime(first_dt), NA),
+         start = as_datetime(start),
+             # start: date and time of onset of a different bacterial infection at the same site
+         stop = ifelse((organism_name!=path & !is.na(organism_name)), as_datetime(last_dt), NA),
+         stop = as_datetime(stop),
+         stop = as_datetime(stop + as.duration("24 hours"))
+         ) %>% 
+  select(mrn, start, stop, first_dt, last_dt, organism_name) %>% 
+  filter(!is.na(start)) %>% 
+  arrange(mrn) %>% 
+  mutate(other_infection_lag0 = T)
+
+# steps 3b - 3e: set up one day after day of infection lags as their own variables, with appropriate start and stop times. 
+step_3b <- step_3a %>% 
+  mutate(start = stop,
+            # start time for second lag = stop time for first lag
+         stop = as_datetime(start + as.duration("24 hours")),
+         other_infection_lag1 = T
+         )
+
+step_3c <- step_3b %>% 
+  mutate(start = stop,
+            # start time for second lag = stop time for first lag
+         stop = as_datetime(start + as.duration("24 hours")),
+         other_infection_lag1 = T
+         )
+
+step_3d <- step_3c %>% 
+  mutate(start = stop,
+            # start time for second lag = stop time for first lag
+         stop = as_datetime(start + as.duration("24 hours")),
+         other_infection_lag1 = T
+         )
+
+step_3e <- step_3d %>% 
+  mutate(start = stop,
+            # start time for second lag = stop time for first lag
+         stop = as_datetime(start + as.duration("24 hours")),
+         other_infection_lag1 = T
+         )
+
+
+# Question here: do we need to worry about multiple overlapping infections "resetting the clock" kind of? ie, if someone gets infection a on day 0 and then infection b on day .5, will we be accidentally creating a "one day out" line on day 1, when it shouldn't be until day 1.5..?
+# check this by checking how many people really have multiple infections. 
+step_3 %>% 
+  filter(!(is.na(other_infection_dt))) %>% 
+  group_by(mrn) %>% 
+  summarize(n_infections = n()) %>% 
+  group_by(n_infections) %>% 
+  summarize(n_infections = sum(n_infections))
+# Yes, there are numerous people with multiple "other infections"
+
+# how to handle: see above. I set up separate variables, so it's possible to be on "infection lag 0" and simultaneously on "infection lag 2" for instance. they're no longer mutually exclusive. 
+
+
 
 # Step 4: combine 2 and 3
 
