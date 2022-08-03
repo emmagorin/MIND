@@ -4,7 +4,7 @@ output:
   html_document:
   code_folding: hide
 editor_options: 
-  chunk_output_type: console
+  chunk_output_type: inline
 ---
 
 # Setup, load packages
@@ -25,7 +25,12 @@ covid_long <- read_csv("./covid_long.csv")
 micro_long <- read_csv("./micro_long.csv")
 micro_long_positives_only <- read_csv("./micro_long_positives_only.csv")
 patients <- read_csv("./patients.csv", col_types = cols(hospice_dt = col_datetime(format = "")))
-bacterial_infections <- read_csv("./bacterial_infections.csv")
+bacterial_infections_blood <- read_csv("./bacterial_infections_blood.csv")
+bacterial_infections_urine <- read_csv("./bacterial_infections_urine.csv")
+bacterial_infections_resp <- read_csv("./bacterial_infections_resp.csv")
+covid_admissions_bact_blood <- read_csv("./covid_admissions_bact_blood.csv")
+covid_admissions_bact_urine <- read_csv("./covid_admissions_bact_urine.csv")
+covid_admissions_bact_resp <- read_csv("./covid_admissions_bact_resp.csv")
 ```
 
 # Quantify what data we have in each type of dataset by MRN:
@@ -529,7 +534,7 @@ adt_long_patients %>%
 Use this dataset to tabulate number of infections, plot time in hospital among covid patients with and without bacterial infections, and test for sameness of time in hospital for these two groups
 ```{r}
 # How many infections did each covid patient have that occurred during covid inpatient admissions?
-covid_admissions_bacterial %>% 
+covid_admissions_bact_blood %>% 
   group_by(mrn) %>% 
   summarize(n_bacterial_infections = sum(bacterial_infection)) %>% 
   ungroup() %>%  group_by(n_bacterial_infections) %>% 
@@ -538,7 +543,7 @@ covid_admissions_bacterial %>%
     # >1 means multiple infections 
 
 # plot to compare time in hospital for covid patients with and without bacterial infections:
-covid_admissions_bacterial %>% 
+covid_admissions_bact_blood %>% 
   group_by(mrn) %>% 
   summarize(first_inpatient_dt = min(adt_inpatient_dt),
             last_discharge_dt = max(adt_discharge_dt),
@@ -548,10 +553,12 @@ covid_admissions_bacterial %>%
   ungroup() %>% 
   ggplot(aes(x = covid_days_in_hospital, color = bacterial_infection)) +
   geom_density() +
-  labs(title = "Length of covid admissions for patients with and without bacterial infections")
+  scale_color_manual(values = alpha(c("red", "blue"))) +
+  labs(title = "Length of covid admissions for patients with and without bacterial infections", 
+       x = "Length of stay (days)")
 
 #make covid_admissions_bacterial_temp2 with one row per mrn:
-covid_admissions_bacterial2 <- covid_admissions_bacterial %>% 
+covid_admissions_bacterial2 <- covid_admissions_bact_blood %>% 
   group_by(mrn) %>% 
   summarize(first_inpatient_dt = min(adt_inpatient_dt),
             last_discharge_dt = max(adt_discharge_dt),
@@ -1107,17 +1114,13 @@ micro_long %>%
   ggplot(aes(x = order_dt)) +
   geom_histogram()
 ```
-
-  
-  
-  
   
 
 # What counts as a covid admission?
 
 In mind_risk_set_matching_analysis, I observed that there are likely many circumstances when patients are discharged and then readmitted quickly. If both admissions occur within 7 days after covid diagnosis, then they are considered "covid admissions" according to the rules I set up earlier, which is how I noticed that this occurs. However - this might also occur after 7 days, so I'll explore this below.
 
-(In other words: What happens if we consider re-admissions that aren't within the timeframe (48 hrs before covid diagnosis through 7 days after) that would label them a "covid admission", but do occur shortly after a covid discharge, suggesting that they're likely still related to the same health concerns?)
+In other words: What happens if we consider re-admissions that aren't within the timeframe (48 hrs before covid diagnosis through 7 days after) that would label them a "covid admission", but do occur shortly after a covid discharge, suggesting that they're likely either literally transfers, or quick readmission that are still related to the same health concerns?
 
 First let's look under original rules:
 ```{r}
@@ -1133,38 +1136,8 @@ adt_long_patients %>%
   summarize(n = n()) %>% kable()
 ```
 
-Now, set up new rule and check.
-This is a little tricky - want to assign new covid_admission2 variable based on time since previous admission, but depending on whether previous admission was a covid admission - but, this should be recursive, so even if someone has had 5 admissions or whatever, if there's little time in between and the first one in the series was a covid admission, it should be considered a covid admission.
-
-Try setting this up similarly to how I set up "bacterial_infection" dataframe in the mind_setup file.
-```{r}
-temp <- adt_long_patients %>% 
-  group_by(mrn) %>% 
-  mutate(covid_first_admission_ever = max (covid_admission)) %>% 
-    # covid_first_admission is an indicator of whether patient ever had an admission considered a covid admission by our prvious criteria.
-  filter(covid_first_admission_ever == T, 
-         dur_covid_to_inpatient > -(as.duration("2 days"))) %>% 
-    # keep only patients who ever had a covid admission per our previous criteria and visits taking place later than two-days-before time of covid pos test.
-  arrange(mrn, adt_inpatient_dt) %>% 
-  mutate(previous_discharge_dt = lag(adt_discharge_dt, n = 1, default = NA), 
-            # create var with time of previous discharge
-         time_since_prev_discharge = as.duration(adt_inpatient_dt - previous_discharge_dt),
-            # create var with time between previous discharge and this line's admission to inpatient care
-         time_since_prev_discharge = replace_na(time_since_prev_discharge, 0), 
-             # make 0 if NA, should avoid warnings
-         days_since_prev_discharge = time_since_prev_discharge/86400,
-         start_non_covid_admissions_dt = case_when(time_since_prev_discharge > as.duration("2 days") ~ adt_inpatient_dt),
-            # start date of admissions that are not considered to be covid admissions, because > 2 days have elapsed
-         start_non_covid_admissions_dt = min(start_non_covid_admissions_dt, na.rm=T),
-         start_non_covid_admissions_dt = na_if(start_non_covid_admissions_dt, -Inf),
-             # Establish start of non-covid admissions as inpatient admission dt if there has been a lapse of > 48 hours
-         after_lapse = (adt_inpatient_dt >= start_non_covid_admissions_dt),
-             # Is the inpatient time later than the start of non-covid admissions?
-         covid_admission2 = !(adt_inpatient_dt >= start_non_covid_admissions_dt))
-              # covid_admission2 will be true if covid test occurs within -2 - 7 days of inpatient admission, or if they occur after this but
-              # with lapses of < 48 hours since a previous appointment. Ie, if someone keeps leaving and being re-admitted in < 48 hrs, all
-              # visits will be considered to be covid visits until they have been out of the hospital for at least 48 hrs. 
-```
+10/24: covid admission2 variable is now set up in the mind_setup file. 
+We can compare this new variable to the previous variable below:
 
 Look at distribution of time from covid visit to subsequent visit, for patients who had a subsequent visit. (This does not include any info on visits after that)
 ```{r}
@@ -1213,5 +1186,213 @@ temp %>%
   summarize(n = n()) %>% kable()
 ```
 
+# 11/4/21: General tabulations for presentation:
+
+```{r}
+# how many total patients tested for covid?
+covid_long %>% 
+  group_by(mrn) %>% 
+  summarize(n = n()) %>% 
+  summarize(n = n())
+
+# how many patients tested positive for covid?
+patients %>% 
+  filter(covid_pos_ever == T) %>% 
+  count()
+
+# how many patients had covid-19 related inpatient stays?:
+adt_long_patients %>% 
+  filter(covid_admission2 == T) %>% 
+  group_by(mrn) %>% 
+  summarize(n = n()) %>% 
+  summarize(n = n())
+
+# how many patients total had inpatient admissions?
+adt_long_patients %>% 
+  filter(is.na(adt_inpatient_dt) == F) %>% # filter for only those who ever had inpatient visit
+  group_by(mrn) %>% 
+  summarize(n = n()) %>% 
+  summarize(n = n())
+
+# how many of the total inpatients were tested for covid?
+adt_long_patients %>% 
+  filter(is.na(adt_inpatient_dt) == F,
+         covid_dataset == T) %>% 
+  group_by(mrn) %>% 
+  summarize(n = n()) %>% 
+  summarize(n = n())
+
+# how many total patients with bloodstream infections were there?
+micro_long_positives_only %>% 
+  filter(specimen_group == "Blood",
+         organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS") %>% 
+  group_by(mrn) %>% 
+  summarize(n = n()) %>% 
+  summarize(n = n())
+
+# How many patients with bloodstream infections during inpatient stays?
+bacterial_infections_blood %>% 
+  filter(organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS") %>% 
+  group_by(mrn) %>% 
+  summarize(n = n()) %>% 
+  summarize(n = n())
+
+#How many patients had bacterial infections during covid-related inpatient stays?
+covid_admissions_bact_blood %>% 
+  filter(is.na(organism_name) == F) %>% 
+  group_by(mrn) %>% 
+  summarize(n = n()) %>% 
+  summarize(n = n())
+
+# REPEAT ABOVE QUESTIONS FOR URINE AND RESP:
+
+# how many total patients with urine infections were there?
+micro_long_positives_only %>% 
+  filter(specimen_group == "Urine",
+         organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS") %>% 
+  group_by(mrn) %>% 
+  summarize(n = n()) %>% 
+  summarize(n = n())
+
+# How many patients with bloodstream infections during inpatient stays?
+bacterial_infections_urine %>% 
+  filter(organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS") %>% 
+  group_by(mrn) %>% 
+  summarize(n = n()) %>% 
+  summarize(n = n())
+
+#How many patients had bacterial infections during covid-related inpatient stays?
+covid_admissions_bact_urine %>% 
+  filter(is.na(organism_name) == F) %>% 
+  group_by(mrn) %>% 
+  summarize(n = n()) %>% 
+  summarize(n = n())
+
+# how many total patients with respiratory infections were there?
+micro_long_positives_only %>% 
+  filter(specimen_group == "Respiratory",
+         organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS") %>% 
+  group_by(mrn) %>% 
+  summarize(n = n()) %>% 
+  summarize(n = n())
+
+# How many patients with respiratory infections during inpatient stays?
+bacterial_infections_resp %>% 
+  filter(organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS") %>% 
+  group_by(mrn) %>% 
+  summarize(n = n()) %>% 
+  summarize(n = n())
+
+#How many patients had bacterial infections during covid-related inpatient stays?
+covid_admissions_bact_resp %>% 
+  filter(is.na(organism_name) == F) %>% 
+  group_by(mrn) %>% 
+  summarize(n = n()) %>% 
+  summarize(n = n())
+
+
+
+
+```
+
+Tabulate top organisms for covid and non covid, blood, bacterial and respiratory cultures
+```{r}
+# What bacterial infections were common during covid-related inpatient stays?
+  covid_admissions_bact_blood %>% 
+  group_by(organism_name) %>% 
+  filter(is.na(organism_name) == F) %>% 
+  summarize(n_cases = n()) %>% 
+  #ungroup() %>% 
+  slice_max(n_cases, n = 10) %>% 
+  kable(caption = "Most common blood infections covid inpatients")
+
+  covid_admissions_bact_urine %>% 
+  group_by(organism_name) %>% 
+  filter(is.na(organism_name) == F) %>% 
+  summarize(n_cases = n()) %>% 
+  #ungroup() %>% 
+  slice_max(n_cases, n = 10) %>% 
+  kable(caption = "Most common urine infections covid inpatients")
+  
+  covid_admissions_bact_resp %>% 
+  group_by(organism_name) %>% 
+  filter(is.na(organism_name) == F) %>% 
+  summarize(n_cases = n()) %>% 
+  #ungroup() %>% 
+  slice_max(n_cases, n = 10) %>% 
+  kable(caption = "Most common respiratory infections covid inpatients")
+  
+  bacterial_infections_blood %>% 
+  group_by(organism_name) %>% 
+  filter(is.na(organism_name) == F) %>% 
+  filter(organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS") %>% 
+  summarize(n_cases = n()) %>% 
+  #ungroup() %>% 
+  slice_max(n_cases, n = 10) %>% 
+  kable(caption = "Most common blood infections all inpatients")
+  
+  bacterial_infections_urine %>% 
+  group_by(organism_name) %>% 
+  filter(is.na(organism_name) == F) %>%
+  filter(organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS") %>% 
+  summarize(n_cases = n()) %>% 
+  #ungroup() %>% 
+  slice_max(n_cases, n = 10) %>% 
+  kable(caption = "Most common urine infections all inpatients")
+  
+  bacterial_infections_resp %>% 
+  group_by(organism_name) %>% 
+  filter(is.na(organism_name) == F) %>%
+  filter(organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS") %>% 
+  summarize(n_cases = n()) %>% 
+  #ungroup() %>% 
+  slice_max(n_cases, n = 10) %>% 
+  kable(caption = "Most common respiratory infections all inpatients")
+```
+
+Tabulate number of infections for each:
+```{r}
+covid_admissions_bact_blood %>% filter(bacterial_infection == T) %>% count()
+covid_admissions_bact_urine %>% filter(bacterial_infection == T) %>% count()
+covid_admissions_bact_resp %>% filter(bacterial_infection == T) %>% count()
+
+bacterial_infections_blood %>% filter(organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS") %>% count()
+
+bacterial_infections_urine %>% filter(organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS") %>% count()
+
+bacterial_infections_resp %>% filter(organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS") %>% count()
+```
+
+What hospitals??
+```{r}
+adt_long %>% 
+  ungroup() %>% 
+  group_by(adt_site) %>% 
+  summarize(n = n()) %>% 
+  arrange(desc(n))
+```
+
+3/4/22: Look into patients in ICU from adt_long(?)
+
+How many patients (in full adt_long_patients dataset) have EVER had an icu stay?
+```{r}
+adt_long_patients %>% 
+  group_by(mrn) %>% 
+  mutate(icu = ifelse(adt_care_level == "Intensive Care (ICU)", T, F)) %>% 
+  summarize(icu_ever = max(icu)) %>% 
+  ungroup() %>% 
+  summarize(n_icu_ever = sum(icu_ever, na.rm = T))
+
+adt_long_patients %>% 
+  filter(adt_care_level == "Intensive Care (ICU)") %>% 
+  count()
+```
+
+698 people have had 716 ICU stays.
+
+How about among people with covid stays?
+```{r}
+
+```
 
 

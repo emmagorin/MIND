@@ -233,7 +233,8 @@ step_2 <- df %>%
   select(mrn) %>% # This is just a list of mrns at this point!
   mutate(time = 0,
          other_infection = 0)
-# is this step necessary? It's a question.....
+# is this step necessary? not sure...
+
 
 # Step 3: set up dataframe with just MRN, time of onset of other infection (that's not path of interest) and other_infection = 1 (since we're only keeping lines that do have another infection with a different pathogen) - or variation that Jeff suggested, with categories 1-5 for five days after other infection was detected.
 
@@ -264,21 +265,21 @@ step_3c <- step_3b %>%
   mutate(start = stop,
             # start time for second lag = stop time for first lag
          stop = as_datetime(start + as.duration("24 hours")),
-         other_infection_lag1 = T
+         other_infection_lag2 = T
          )
 
 step_3d <- step_3c %>% 
   mutate(start = stop,
             # start time for second lag = stop time for first lag
          stop = as_datetime(start + as.duration("24 hours")),
-         other_infection_lag1 = T
+         other_infection_lag3 = T
          )
 
 step_3e <- step_3d %>% 
   mutate(start = stop,
             # start time for second lag = stop time for first lag
          stop = as_datetime(start + as.duration("24 hours")),
-         other_infection_lag1 = T
+         other_infection_lag4 = T
          )
 
 

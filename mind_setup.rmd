@@ -358,10 +358,10 @@ This section should make several datasets:
 
 Set up functions that will make the datasets:
 ```{r}
-set_up_bacterial_infections_df <- function(input_df, output_df) {
+set_up_bacterial_infections_df <- function(specimen_group_name) {
   # make dataset of blood bacterial infections:
-  output_df <- input_df %>% 
-    filter(specimen_group == "Blood") %>% 
+  micro_long_positives_only %>% 
+    filter(specimen_group == specimen_group_name) %>% 
     left_join(adt_long) %>% # We now have one row per micro result x adt record
     mutate(collected_or_order_dt = pmin(collected_dt, order_dt, na.rm = T)) %>% 
       # Some of the records have order_dt, others have collected_dt. This should give us the one that's non-missing or the earlier of the two.
@@ -400,12 +400,13 @@ set_up_bacterial_infections_df <- function(input_df, output_df) {
              covid_and_bacterial_same_admission = replace_na(covid_and_bacterial_same_admission, F))
 }
 
-set_up_covid_admissions_bact_df <- function(input_df, output_df) {
+set_up_covid_admissions_bact_df <- function(input_df) {
     #first, set up bacterial infections dataset:
   bacterial_infections_temp <- input_df %>% 
     select(mrn, adt_visit, organism_name, first_dt, last_dt, max_lapse_in_visit, duration_bacteremia,
            adt_inpatient_dt, covid_and_bacterial_same_admission) %>% 
     filter(organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS")
+  # leave out these common contaminants, may want to refine this later.
   
   output_df <- adt_long_patients %>% 
   filter(covid_admission2 == T) %>% # keep only "covid admissions" based on the covid_admissions2 definition.
@@ -417,32 +418,30 @@ set_up_covid_admissions_bact_df <- function(input_df, output_df) {
     # kind of the same as covid_and_bacterial_same_admission, may want to simplify later.
 
   rm(bacterial_infections_temp)
+  return(output_df)
 }
 ```
 
-
-
-
-adt_patients_bacterial_temp add 7/5-7/6: Set up dataset of covid stays merged with bacterial infections
+checkpoint:
 ```{r}
-#first, set up bacterial infections dataset:
-bacterial_infections_temp <- bacterial_infections %>% 
-  select(mrn, adt_visit, organism_name, first_dt, last_dt, max_lapse_in_visit, duration_bacteremia,
-         adt_inpatient_dt, covid_and_bacterial_same_admission) %>% 
-  filter(organism_name!="STAPHYLOCOCCUS EPIDERMIDIS" & organism_name!="STAPHYLOCOCCUS HOMINIS" & organism_name!="STAPHYLOCOCCUS CAPITIS")
-    # leave out these common contaminants, may want to refine this later.
-
-covid_admissions_bacterial <- adt_long_patients %>% 
-  filter(covid_admission2 == T) %>% # keep only "covid admissions" based on the covid_admissions2 definition.
-  distinct() %>% # remove duplicates! Like for that one person with enterobacter
-  left_join(bacterial_infections_temp, by = c("mrn" = "mrn", "adt_inpatient_dt" = "adt_inpatient_dt")) %>% 
-    # join by mrn and by inpatient admission, so each should be matched only with bacterial infections taking place during that inpatient admission.
-    mutate(bacterial_infection = case_when(is.na(organism_name) ~ F, is.na(organism_name) == F ~ T))
-    # bacterial infection is true if the observation has a bacterial infection, false otherwise.
-    # kind of the same as covid_and_bacterial_same_admission, may want to simplify later.
+covid_admissions_bact_blood %>% ungroup() %>% filter(bacterial_infection == T) %>% count()
+covid_admissions_bact_urine %>% ungroup() %>% filter(bacterial_infection == T) %>% count()
+covid_admissions_bact_resp %>% ungroup() %>% filter(bacterial_infection == T) %>% count()
 ```
 
-Bacterial_infections_urine" Repeat dataset of bacterial infections, set up exact same way as above, except with urine cultures only. Only includes infections during inpatient stays, just like above.
+
+Use functions created above to create the datasets:
+```{r}
+bacterial_infections_blood <-set_up_bacterial_infections_df(specimen_group_name = "Blood")
+bacterial_infections_urine <-set_up_bacterial_infections_df(specimen_group_name = "Urine")
+bacterial_infections_resp <-set_up_bacterial_infections_df(specimen_group_name = "Respiratory")
+
+covid_admissions_bact_blood <- set_up_covid_admissions_bact_df(input_df = bacterial_infections_blood)
+covid_admissions_bact_urine <- set_up_covid_admissions_bact_df(input_df = bacterial_infections_urine)
+covid_admissions_bact_resp <- set_up_covid_admissions_bact_df(input_df = bacterial_infections_resp)
+```
+
+
 
 
 # Write each dataframe to csv
@@ -456,10 +455,12 @@ write_csv(covid_long, "./covid_long.csv")
 write_csv(micro_long, "./micro_long.csv")
 write_csv(micro_long_positives_only, "./micro_long_positives_only.csv")
 write_csv(patients, "./patients.csv")
-write_csv(bacterial_infections, "./bacterial_infections.csv")
+write_csv(bacterial_infections_blood, "./bacterial_infections_blood.csv")
 write_csv(bacterial_infections_urine, "./bacterial_infections_urine.csv")
 write_csv(bacterial_infections_resp, "./bacterial_infections_resp.csv")
-write_csv(covid_admissions_bacterial, "./covid_admissions_bacterial.csv")
+write_csv(covid_admissions_bact_blood, "./covid_admissions_bact_blood.csv")
+write_csv(covid_admissions_bact_urine, "./covid_admissions_bact_urine.csv")
+write_csv(covid_admissions_bact_resp, "./covid_admissions_bact_resp.csv")
 
 ```
 

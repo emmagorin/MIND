@@ -25,7 +25,7 @@ For the moment, I have not included time-varying covariates.
 
 ```{r}
 example_df <- tibble(id = 1:20,
-                     status = c(rep(1,5), rep(0,15)), # 1 = infection, 0 = no infection
+                     status = c(rep(T,5), rep(F,15)), # 1 = infection, 0 = no infection
                      days_in_hospital = c(10,25,40,17,4,5,10,12,8,20,28,44,8,15,15,1,6,18,26,33),
                      time = c(6,18,12,15,2,5,10,12,8,20,28,44,8,15,15,1,6,18,26,33), # if infected, time = day of infection, otherwise, time = days in hospital
                      cov1 = c(1,1,0,0,1,0,0,1,0,1,1,0,0,1,1,0,1,1,1,0),
