@@ -195,6 +195,9 @@ matching_df_all_vars <- df %>%
 
 INDIVIDUAL PATHOGEN VERSION:
 
+Note 8/4/22: I believe the two sections below is focused on setting up with time-invarying covariates and then adding in previous infections as a time varying covariate. I had a lot of indecision about how to do this, and it seems complicated to set up. I will start with trying to figure out how to incorporate ICU stay as a time-varying covariate, and then return to the question of prior infections after that.
+
+Set up dataframe with just time-invarying covars
 ```{r}
 # Step 1: set up dataframe with just MRN, time-invarying covariates, time of censoring or event, and event 1 or 0 (where event is onset of infection with path of interest)
 
@@ -224,8 +227,11 @@ path_of_interest <- df %>%
     # available on every row without having to include them explicitly in summarize, so I did it this way.
   select(mrn, first_inpatient_dt, last_discharge_dt, age_at_admission, combined_race_ethnicity, sex, first_path_of_interest_dt, time, event)
  
-# 1/25/22: Will want to add in other baseline variables at some point. 
+# 1/25/22: Will want to add in other baseline variables at some point.
+```
 
+Set up prior infections:
+```{r}
 # Step 2: set up dataframe with one row per MRN, time = 0 and other infection = 0
 step_2 <- df %>% 
   group_by(mrn) %>% 
@@ -308,7 +314,7 @@ step_3 %>%
 ```
 
 
-## Results DF
+## Set up results DF
 Set up dataframe to record results:
 ```{r}
 ttest_output <- tibble(sample = c("unmatched", "matched", "matched - uninfected controls only"), 
@@ -317,11 +323,11 @@ ttest_output <- tibble(sample = c("unmatched", "matched", "matched - uninfected 
                        CI_ub = c(0,0,0))
 ```
 
-# Matching:
+## COXPH model for matching:
 
 I'll run the coxph first, then loop through a simple matching algorithm
 
-## Setup for coxph. 
+### Setup for coxph. 
 
 Check for missingness, since we will get rid of anything with missing variables:
 ```{r}
@@ -364,6 +370,9 @@ In this code chunk, we add a time variable and exclude cases that have any missi
 ALTERNATE COXPH_DF: USE FOR INDIVIDUAL PATHOGEN ANALYSES.
 COMMENT OUT SECTION ABOVE.
 What's different about this version: variable "time" will be used to do the cox analysis, and refers to the time of infection of the pathogen of interest ONLY and otherwise is the time in hospital. variable "time_any_pathogen" is the time of infection for anyone who has had an infection at the site with any pathogen. It will be used for the sole purpose of determining the risk set from which to draw controls (ie, not including individuals who have already been infected with a different pathogen already as an eligible control.)
+
+8/3/22 Note: Now that I'm returning to this project, I'm rethinking the above entirely. Why shouldn't people who have already had a different infection be controls? Perhaps I've addressed this differently in different places below, I'll check as I keep reviewing.
+
 ```{r}
 coxph_df <- matching_df_all_vars %>% 
   mutate(time = case_when(is.na(trt_time) == F & organism_name == path ~ trt_time, 
@@ -394,7 +403,7 @@ Checkpoint: did I correctly set status to be T for people who had infections, F 
 9/10/21: These numbers should be the same, and yet they are slightly different! Need to look into why. Why do we have status = 1 for some people who are NOT listed as having covid and bacterial infections in the same admission? Look into how each variable was created to figure out. Not a big impediment, but need to figure out.
 11/22/21: probably don't worry about this, now that I'm using this file for multiple types of infections and covid_bacterial_same_admission is only for bloodstream infections, I think.
 
-## Set up cox model:
+### Set up cox model:
 ```{r}
 coxph_model <- coxph(Surv(time, status) ~ age_at_admission + sex + covid_visits_start_date + combined_race_ethnicity + bmi + dx_dm + dx_htn + dx_cad + dx_hrt_failure,
                data = coxph_df)
@@ -412,7 +421,9 @@ propensity <- predict(coxph_model, type = "risk", x = coxph_df)
 - why doesn't propensity come out as as long as the coxph_model dataframe? Are there a bunch missing all their variables or soemthing????
     Update 9/2: had to do with missing values. updating to napredict might work.....
 
-## Matching procedure
+## Matching and results considering not-yet infected people as controls:
+
+### Matching:
 
 Set up "risk set" dataframe, which will include everyone for starters. This will be revised each time matching happens.
 ```{r}
@@ -453,6 +464,9 @@ Now run the matching process:
 ```
 
 SINGLE PATHOGEN VARIATION: time_any_path must be greater than the next exposed person's time_any_path - ie, this is where we exclude people already infected with a different pathogen from the potential control group.
+
+8/3/22 note: I've set this up without replacement, but I'm thinking it will be both easier and more correct to set it up WITH replacement based on my reading yesterday. Maybe redo to change this.
+
 ```{r}
 for(i in 1:nrow(matches)) {
   # pick control among eligible riskset based on propensity
@@ -483,7 +497,7 @@ matches %>%
 ```
  This is higher than would be seen at random, but is consistent with literature (at least in that "later exposed" ppl are selected as controls more often than random), because presumably these individuals have commonalities with the infected individuals they serve as controls for.
 
-# Make some comparisons in the datasets and between matches:
+### Set up datasets:
 
 Set up dataset with all data and the matched individuals only
 ```{r}
@@ -494,7 +508,7 @@ matched_ppl <- c(unlist(matches$mrn), unlist(matches$ctrl_mrn))
 matched_ppl_df <- coxph_df %>% filter(mrn %in% matched_ppl)
 ```
 
-Check covariate balance:
+### Check covariate balance:
 ```{r}
 # # compare baseline characteristics in the unmatched sample:
 # example_df %>% 
@@ -533,7 +547,7 @@ In this very small example, there was already a pretty good balance between grou
 covariates before matchin, and comparable balance after matching. I don't expect this to be the 
 case with the real data.
 
-# Look at results:
+### Look at results:
 
 ```{r}
 # make subsets of data to use for t-tests (there's surely a quicker way, but this should work)
@@ -572,7 +586,10 @@ matches %>%
        x = "Length of stay (days)")
 ```
 
-## Now, consider only never-infected people as controls:
+## Matching and procedure and results considering only never-infected people as controls:
+note 8/3: This doesn't really make sense, I think I should probably should consider anyone not-yet-infected to be a control.
+
+### Matching:
 
 Set up "risk set" dataframe, which will include ONLY UNINFECTED people
 ```{r}
@@ -616,9 +633,7 @@ for(i in 1:nrow(matches2)) {
 }
 ```
 
-## Look at results using matches2:
-
-# Look at results:
+### Results:
 
 ```{r}
 # make subsets of data to use for t-tests (there's surely a quicker way, but this should work)
