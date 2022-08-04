@@ -67,9 +67,8 @@ adt_long <- adt_long_orig %>%
          adt_ed_admission_date = date(adt_ed_admission_dt),
          adt_inpatient_date = date(adt_inpatient_dt),
          adt_discharge_date = date(adt_discharge_dt)) %>% 
-  filter(adt_event_dt < ymd(20210301)) 
-# this dataset was updated in Feb 2021, so dates later than march 2021 are errors.
-# not sure how to keep this up to date once it's later in the year and these are indistinguishable from correct data.
+  filter(adt_event_dt < ymd(Sys.Date())) 
+# 8/4/22: updated line above to just exclude dates after whatever today's date is, since these are definitely errors. There may be other errors that are missed too of course but this is a start.
 ```
 
 
