@@ -26,7 +26,7 @@ Load files
 setwd("/Users/emma/Desktop/local_only/mind_study")
 
 # adt_long <- read_csv("./adt_long.csv")
-# adt_long_patients <- read_csv("./adt_long_patients.csv")
+adt_long_patients <- read_csv("./adt_long_patients.csv")
 # covid_long <- read_csv("./covid_long.csv")
 # micro_long <- read_csv("./micro_long.csv")
 # micro_long_positives_only <- read_csv("./micro_long_positives_only.csv")
@@ -88,7 +88,7 @@ Options for individual pathogens:
 ```
 
 
-# Exploratory code also in mind_exploratory rmd file
+## Exploratory code also in mind_exploratory rmd file
 Most of the following code is also in the mind_exploratory rmd file. Revisit questions about how many covid admissions each patient has and how many bacterial infections each patient has occuring during covid admissions:
 ```{r}
 # # how many "covid admissions" does each patient have?
@@ -126,7 +126,7 @@ or with multiple stays that are initiated by emergency room visits with the week
 I may want to look for transfers to ICU care that happen later in the trajectory for patients with covid admissions - 
 ie, if they were admitted and then transferred and the transfer shows up as a different line.
 
-# Plot length of stay pre-matching
+## Plot length of stay pre-matching
 
 ```{r}
 df %>% 
@@ -165,7 +165,7 @@ df %>%
        x = "Length of stay (days)")
 ```
 
-# Initial steps to set up data for matching:
+## Initial steps to set up data for matching:
 
 First step of setting up data for matching:
 8/6 - to do: update some of these to match "working with dates" instructions from https://www.emilyzabor.com/tutorials/survival_analysis_in_r_tutorial.html#Part_1:_Introduction_to_Survival_Analysis
@@ -197,7 +197,7 @@ INDIVIDUAL PATHOGEN VERSION:
 
 Note 8/4/22: I believe the two sections below is focused on setting up with time-invarying covariates and then adding in previous infections as a time varying covariate. I had a lot of indecision about how to do this, and it seems complicated to set up. I will start with trying to figure out how to incorporate ICU stay as a time-varying covariate, and then return to the question of prior infections after that.
 
-Set up dataframe with just time-invarying covars
+### Set up dataframe with just time-invarying covars
 ```{r}
 # Step 1: set up dataframe with just MRN, time-invarying covariates, time of censoring or event, and event 1 or 0 (where event is onset of infection with path of interest)
 
@@ -230,7 +230,7 @@ path_of_interest <- df %>%
 # 1/25/22: Will want to add in other baseline variables at some point.
 ```
 
-Set up prior infections:
+### Set up prior infections:
 ```{r}
 # Step 2: set up dataframe with one row per MRN, time = 0 and other infection = 0
 step_2 <- df %>% 
@@ -313,6 +313,63 @@ step_3 %>%
 # step 7???? might need to set up the rest of the matching df (like, time in hospital, etc) to use for the matching step later. 
 ```
 
+### Set up ICU stays:
+
+Some exploration:
+```{r}
+temp <- adt_long_patients %>% 
+  filter(adt_status != adt_care_level)
+# only 20 instances in which adt_status !=adt_care_level, all of which have adt_status = outpatient and adt_care_level = acute. Not sure why this is the case, mostly in "infusion" cases
+
+# Let's look at ppl who have been in the ICU to get a sense of how the dataset is structured:
+temp <- adt_long_patients %>% 
+  filter(adt_status == "Intensive Care (ICU)")
+
+# make list of mrns who have ever been in the ICU
+icu_mrns <- adt_long_patients %>% 
+  filter(adt_status == "Intensive Care (ICU)")  %>% 
+  select(mrn) 
+
+# Look at all adt records of anyone who has been in the ICU:
+adt_long_patients %>% 
+  filter(mrn %in% icu_mrns$mrn) %>% 
+  view()
+
+# do any of them have "inpatient" as their care status?
+adt_long_patients %>% 
+  filter(mrn %in% icu_mrns$mrn, 
+         adt_status == "Inpatient") %>% 
+  view()
+
+# Look at some examples who have a bunch of ICU stays:
+adt_long_patients %>% filter(mrn == 1000583708) %>% view()
+adt_long_patients %>% filter(mrn == 1000375054) %>% view()
+adt_long_patients %>% filter(mrn == 1004941330) %>% view()
+adt_long_patients %>% filter(mrn == 1004752835) %>% view()
+adt_long_patients %>% filter(mrn == 1200173905) %>% view()
+
+# let's see how the "covid admissions "covid admissions" correspond for some of these patients.
+# Who is there who even was in the ICU who also had a covid infection? - plenty of ppl, it seems
+covid_admissions_bact_blood %>% filter(mrn %in% icu_mrns$mrn) %>% view()
+covid_admissions_bact_resp %>% filter(mrn %in% icu_mrns$mrn) %>% view()
+covid_admissions_bact_urine %>% filter(mrn %in% icu_mrns$mrn) %>% view()
+	
+
+# This one is making me confused about the covid visit start - it looks like one of these first had a pos covid test at discharge? Look into how that variable was defined.
+```
+
+Make extremely simple ICU variable that can be tmerged (I think) in with the basic data
+```{r}
+icu_stay <- df %>% 
+  mutate(icu = (adt_care_level == "Intensive Care (ICU)"),
+         start = adt_event_date,
+         stop = adt_discharge_date) %>% 
+  select(mrn, adt_care_level, icu, start, stop)
+
+# checkpoint: how does this look for ppl with ICU stays only?
+icu_stay %>% filter(mrn %in% icu_mrns$mrn) %>% arrange(mrn) %>% view()
+```
+Note 8/5: mostly looks good, there appear to be a few duplicated lines, which is confusing, but otherwise seems ok.
 
 ## Set up results DF
 Set up dataframe to record results:
