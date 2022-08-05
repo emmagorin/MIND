@@ -287,9 +287,12 @@ adt_long_patients <- adt_long_patients %>%
 
 
 temp df will define more specific version of covid admission variable. This is taken from mind_exploratory 10/18/21. Once set up, this can be merged in with adt_long_patient
+
+8/4/22 note: When I say "more specific" I mean that this is where I make sure to keep admissions that occurred within a short time span from previous covid admissions. This ensures that we're keeping observations that are actually transfers, as well as quick readmissions that happen for whatever reason.
 ```{r}
 temp <- adt_long_patients %>% 
   group_by(mrn) %>% 
+  select(mrn, covid_admission, dur_covid_to_inpatient, adt_inpatient_dt, adt_discharge_dt, encounter_id) %>% 
   mutate(covid_first_admission_ever = max (covid_admission)) %>% 
     # covid_first_admission is an indicator of whether patient ever had an admission considered a covid admission by our previous criteria.
   filter(covid_first_admission_ever == T, 
@@ -299,13 +302,11 @@ temp <- adt_long_patients %>%
   mutate(previous_discharge_dt = lag(adt_discharge_dt, n = 1, default = NA), 
             # create var with time of previous discharge
          time_since_prev_discharge = as.duration(adt_inpatient_dt - previous_discharge_dt),
-            # create var with time between previous discharge and this line's admission to inpatient care
-         time_since_prev_discharge = replace_na(time_since_prev_discharge, 0), 
-             # make 0 if NA, should avoid warnings
-         days_since_prev_discharge = time_since_prev_discharge/86400,
+            # create var with time between previous discharge and next admission (this line's admission to inpatient care)
+         days_since_prev_discharge = ifelse(is.na(time_since_prev_discharge),NA,time_since_prev_discharge/86400),
          start_non_covid_admissions_dt = case_when(time_since_prev_discharge > as.duration("2 days") & dur_covid_to_inpatient > as.duration("7 days") ~ adt_inpatient_dt),
             # start date of admissions that are not considered to be covid admissions, because > 2 days have elapsed since previous visit, AND visit starts after -2-7 day window.
-         start_non_covid_admissions_dt = min(start_non_covid_admissions_dt, na.rm=T),
+         start_non_covid_admissions_dt = suppressWarnings(min(start_non_covid_admissions_dt, na.rm=T)),
          start_non_covid_admissions_dt = na_if(start_non_covid_admissions_dt, -Inf),
              # Establish start of non-covid admissions as inpatient admission dt if there has been a lapse of > 48 hours
          after_lapse = (adt_inpatient_dt >= start_non_covid_admissions_dt),
@@ -314,6 +315,8 @@ temp <- adt_long_patients %>%
              # covid_admission2 will be true if: 1) if covid_admission was true (if admission starts within -2 - 7 days after covid test) OR 2) if admission starts after this but with lapses of < 48 hours since a previous appointment. (if someone keeps leaving and being re-admitted in < 48 hrs, all visits will be considered to be covid visits until they have been out of the hospital for at least 48 hrs.) else, false.
   select(encounter_id, covid_admission2)
 ```
+
+
 
 Merge temp with adt_long_patients: This will add covid_admission2 variable.
 ```{r}
@@ -330,7 +333,7 @@ adt_long_patients %>%
 
 adt_long_patients %>% 
   filter(covid_admission == T, covid_admission2 == F) %>% 
-  count()
+  count() # should be 0.
 ```
 
 Make mini dataset from micro_long data:
@@ -375,10 +378,10 @@ set_up_bacterial_infections_df <- function(specimen_group_name) {
     mutate(ccollected_or_order_dt = as_datetime(collected_or_order_dt),
            previous_collected_or_order_dt = lag(collected_or_order_dt, n = 1, default = NA),
            time_since_prev = as.duration(collected_or_order_dt - previous_collected_or_order_dt),
-           time_since_prev = replace_na(time_since_prev, 0), # make 0 if NA. Should avoid warnings.
-           max_lapse_in_visit = as.duration(max(time_since_prev)),
+           #time_since_prev = replace_na(time_since_prev, 0), # make 0 if NA. Should avoid warnings.
+           max_lapse_in_visit = as.duration(suppressWarnings(max(time_since_prev))),
            start_new_infection_dt = case_when(time_since_prev > as.duration("30 days") ~ collected_or_order_dt),
-           start_new_infection_dt = max(start_new_infection_dt, na.rm=T),
+           start_new_infection_dt = suppressWarnings(max(start_new_infection_dt, na.rm=T)),
            start_new_infection_dt = na_if(start_new_infection_dt, -Inf),
            infection_number = case_when(is.na(start_new_infection_dt) ~ 1, 
                                         # infection_number is 1 if there was never a lapse of >30 days
@@ -389,7 +392,7 @@ set_up_bacterial_infections_df <- function(specimen_group_name) {
     group_by(mrn, adt_visit, organism_name, infection_number) %>% # grouping by infection number allows me to separate out separate infections
     summarize(first_dt = min(collected_or_order_dt, na.rm = T),
               last_dt = max(collected_or_order_dt, na.rm = T),
-              max_lapse_in_visit = as.duration(max(max_lapse_in_visit, na.rm = T))) %>% 
+              max_lapse_in_visit = as.duration(suppressWarnings(max(max_lapse_in_visit, na.rm = T)))) %>% 
     mutate(duration_bacteremia = as.duration(last_dt - first_dt)) %>% 
     left_join(patients) %>% 
     left_join(adt_long) %>% # We now have one row per micro result x adt record
@@ -421,12 +424,6 @@ set_up_covid_admissions_bact_df <- function(input_df) {
 }
 ```
 
-checkpoint:
-```{r}
-covid_admissions_bact_blood %>% ungroup() %>% filter(bacterial_infection == T) %>% count()
-covid_admissions_bact_urine %>% ungroup() %>% filter(bacterial_infection == T) %>% count()
-covid_admissions_bact_resp %>% ungroup() %>% filter(bacterial_infection == T) %>% count()
-```
 
 
 Use functions created above to create the datasets:
@@ -441,6 +438,12 @@ covid_admissions_bact_resp <- set_up_covid_admissions_bact_df(input_df = bacteri
 ```
 
 
+checkpoint:
+```{r}
+covid_admissions_bact_blood %>% ungroup() %>% filter(bacterial_infection == T) %>% count()
+covid_admissions_bact_urine %>% ungroup() %>% filter(bacterial_infection == T) %>% count()
+covid_admissions_bact_resp %>% ungroup() %>% filter(bacterial_infection == T) %>% count()
+```
 
 
 # Write each dataframe to csv
