@@ -173,7 +173,7 @@ First step of setting up data for matching:
 matching_df_all_vars <- df %>% 
   group_by(mrn) %>% 
   mutate(first_inpatient_dt = min(adt_inpatient_dt),
-         last_discharge_dt = max(adt_discharge_dt),
+         last_discharge_dt = max(adt_discharge_dt, na.rm = T),
          covid_time_in_hospital = last_discharge_dt - first_inpatient_dt,
          covid_days_in_hospital = covid_time_in_hospital / ddays(1),
          first_bacterial_start_dt = min(first_dt, na.rm = T),
@@ -193,11 +193,24 @@ matching_df_all_vars <- df %>%
   filter(index == 1)
 ```
 
-INDIVIDUAL PATHOGEN VERSION:
+Check: does anyone have a missing first_inpatient_dt or last_discharge_dt? Is inpatient_dt < last_discharge_dt for anyone?
+```{r}
+matching_df_all_vars %>% filter(is.na(first_inpatient_dt) | is.na(last_discharge_dt))
+matching_df_all_vars %>% filter(is.na(last_discharge_dt))
+matching_df_all_vars %>% filter(first_inpatient_dt > last_discharge_dt) %>% view()
+```
+Ok, weirdly is.na(last_discharge_dt) is false, but there clearly are some where this is missing, based on the next check above. For now, let's just drop these.
+```{r}
+matching_df <- matching_df_all_vars %>% filter(last_discharge_dt > first_inpatient_dt)
+```
+
+
+
+### INDIVIDUAL PATHOGEN VERSION:
 
 Note 8/4/22: I believe the two sections below is focused on setting up with time-invarying covariates and then adding in previous infections as a time varying covariate. I had a lot of indecision about how to do this, and it seems complicated to set up. I will start with trying to figure out how to incorporate ICU stay as a time-varying covariate, and then return to the question of prior infections after that.
 
-### Set up dataframe with just time-invarying covars
+#### Set up dataframe with just time-invarying covars
 ```{r}
 # Step 1: set up dataframe with just MRN, time-invarying covariates, time of censoring or event, and event 1 or 0 (where event is onset of infection with path of interest)
 
@@ -370,6 +383,21 @@ icu_stay <- df %>%
 icu_stay %>% filter(mrn %in% icu_mrns$mrn) %>% arrange(mrn) %>% view()
 ```
 Note 8/5: mostly looks good, there appear to be a few duplicated lines, which is confusing, but otherwise seems ok.
+
+### Add time-varying covariates
+
+First pass, set up for the the "any infection" version
+Add ICU variable - try to use tmerge
+
+```{r}
+coxph_df <- tmerge(data1 = matching_df, data2 = matching_df, tstart = first_inpatient_dt, tstop = last_discharge_dt, id = mrn)
+
+coxph_df <- tmerge(coxph_df, icu_stay, id = mrn, tdc = icu)
+
+
+```
+
+
 
 ## Set up results DF
 Set up dataframe to record results:
