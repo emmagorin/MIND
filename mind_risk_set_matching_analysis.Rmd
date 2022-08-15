@@ -7,7 +7,7 @@ editor_options:
   chunk_output_type: console
 ---
 
-# Setup
+## Setup
 Load packages
 ```{r setup, include=FALSE}
 rm(list=ls())
@@ -165,7 +165,8 @@ df %>%
        x = "Length of stay (days)")
 ```
 
-## Initial steps to set up data for matching:
+## Set up data for matching
+### Make df, one line per patient, all variables
 
 First step of setting up data for matching:
 8/6 - to do: update some of these to match "working with dates" instructions from https://www.emilyzabor.com/tutorials/survival_analysis_in_r_tutorial.html#Part_1:_Introduction_to_Survival_Analysis
@@ -176,7 +177,7 @@ matching_df_all_vars <- df %>%
          last_discharge_dt = max(adt_discharge_dt, na.rm = T),
          covid_time_in_hospital = last_discharge_dt - first_inpatient_dt,
          covid_days_in_hospital = covid_time_in_hospital / ddays(1),
-         first_bacterial_start_dt = min(first_dt, na.rm = T),
+         first_bacterial_start_dt = suppressWarnings(min(first_dt, na.rm = T)),
          age_at_admission = as.numeric((as_date(first_inpatient_dt) - as_date(dob))/365),
          bacterial_infection_ever = replace_na(bacterial_infection_ever, 0),
          bacterial_infection_ever = as.logical(bacterial_infection_ever),
@@ -199,18 +200,100 @@ matching_df_all_vars %>% filter(is.na(first_inpatient_dt) | is.na(last_discharge
 matching_df_all_vars %>% filter(is.na(last_discharge_dt))
 matching_df_all_vars %>% filter(first_inpatient_dt > last_discharge_dt) %>% view()
 ```
-Ok, weirdly is.na(last_discharge_dt) is false, but there clearly are some where this is missing, based on the next check above. For now, let's just drop these.
+Ok, weirdly is.na(last_discharge_dt) is false, but there clearly are some where this is missing, based on the next check above. For now, let's just drop these - I'll do so in the time-invarying section
+
+### Set up dataframe for coxph - time-invarying only
+#### All pathogens version
+Check for missingness, since we will get rid of anything with missing variables:
 ```{r}
-matching_df <- matching_df_all_vars %>% filter(last_discharge_dt > first_inpatient_dt)
+for (v in c("age_at_admission", "sex", "adt_status", "covid_visits_start_date", "combined_race_ethnicity", "insurance_type", "bmi", "dx_ckd", "dx_dm", "dx_htn",  "dx_cad",  "dx_hrt_failure")) {
+  n_missing <- matching_df_all_vars %>% 
+    filter(is.na(v)) %>% 
+    summarize(n = n()) %>% 
+    unlist()
+  print(n_missing)
+}
+
+matching_df_all_vars %>% ungroup() %>% filter(is.na(age_at_admission)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(sex)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(adt_status)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(covid_visits_start_date)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(combined_race_ethnicity)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(insurance_type)) %>%  summarize(n = n()) #missing 333
+matching_df_all_vars %>% ungroup() %>% filter(is.na(bmi)) %>%  summarize(n = n()) # - many bmi missing missing 589
+matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_ckd)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_dm)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_htn)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_cad)) %>%  summarize(n = n())
+matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_hrt_failure)) %>%  summarize(n = n())
+```
+
+In this code chunk, we add a time variable and exclude cases that have any missing values. This may need to be amended later, but should work for the moment. (9/10/21)
+```{r}
+coxph_df <- matching_df_all_vars %>%
+  filter(last_discharge_dt > first_inpatient_dt) %>% 
+    # filter out anything where we have a missing last discharge date - at some point I can figure out what's up with this
+  mutate(time = ifelse(is.na(trt_time) == T, covid_days_in_hospital, trt_time),
+                          #time is time of bacterial infection (trt_time) if there was one
+                          
+                          # time is censoring time (days in hospital) if there wasn't an infection
+         
+         time_dt = ifelse(first_bacterial_start_dt > ymd("2100-01-01"), last_discharge_dt, first_bacterial_start_dt),
+                          #time is time of bacterial infection (trt_time) if there was one
+                          # time is censoring time (days in hospital) if there wasn't an infection
+                          # time_dt is version with absolute time instead of time since start of hospitalization
+                          # Note: used this condition to replace "is.na" since that wasn't recognizing NAs for this variable for some reason.
+         test = last_discharge_dt,
+         status = !is.na(trt_time)) %>%
+        # status is F if no infection (and therefore no "treatment time") and T if there was an infection
+  filter(any(is.na(age_at_admission), is.na(sex), is.na(covid_visits_start_date), is.na(combined_race_ethnicity), is.na(bmi), is.na(dx_ckd), is.na(dx_dm), is.na(dx_htn), is.na(dx_cad), is.na(dx_hrt_failure), is.na(time), is.na(status)) == F) %>% 
+  # filter out anything with a missing value for any of our predictor variables or status or time value
+  select(mrn, first_bacterial_start_dt, last_discharge_dt, time_dt, time)
+
+
+```
+Note 8/11/22: We're missing a lot of BMIs - should I consider an alternative plan for this? Removing them all could create a bias
+
+#### Single pathogen version
+
+ALTERNATE COXPH_DF: USE FOR INDIVIDUAL PATHOGEN ANALYSES.
+COMMENT OUT SECTION ABOVE.
+What's different about this version: variable "time" will be used to do the cox analysis, and refers to the time of infection of the pathogen of interest ONLY and otherwise is the time in hospital. variable "time_any_pathogen" is the time of infection for anyone who has had an infection at the site with any pathogen. It will be used for the sole purpose of determining the risk set from which to draw controls (ie, not including individuals who have already been infected with a different pathogen already as an eligible control.)
+
+8/3/22 Note: Now that I'm returning to this project, I'm rethinking the above entirely. Why shouldn't people who have already had a different infection be controls? Perhaps I've addressed this differently in different places below, I'll check as I keep reviewing.
+
+```{r}
+coxph_df <- matching_df_all_vars %>% 
+  mutate(time = case_when(is.na(trt_time) == F & organism_name == path ~ trt_time, 
+                          #time is time of bacterial infection of the pathogen of interest (trt_time) if there was one
+                          is.na(trt_time) == T ~ covid_days_in_hospital,
+                          organism_name != path ~ covid_days_in_hospital),
+                          # time is censoring time (days in hospital) if there wasn't an infection of the pathogen of interest.
+         time_any_pathogen = case_when(is.na(trt_time) == F ~ trt_time, 
+                          #time is time of bacterial infection (trt_time) if there was one
+                          is.na(trt_time) == T ~ covid_days_in_hospital),
+                          # time is censoring time (days in hospital) if there wasn't an infection
+         status = (organism_name == path)) %>% 
+        # status is F if no infection (and therefore no "treatment time") and T if there was an infection
+  filter(any(is.na(age_at_admission), is.na(sex), is.na(covid_visits_start_date), is.na(combined_race_ethnicity), is.na(bmi), is.na(dx_ckd), is.na(dx_dm), is.na(dx_htn), is.na(dx_cad), is.na(dx_hrt_failure), is.na(time), is.na(status)) == F) 
+  # filter out anything with a missing value for any of our predictor variables or status or time value
 ```
 
 
-
-### INDIVIDUAL PATHOGEN VERSION:
+Checkpoint: did I correctly set status to be T for people who had infections, F otherwise?
+```{r}
+# coxph_df %>% 
+#   ungroup() %>% 
+#   summarize(prop_status_1 = mean(status),
+#             n_with_status_1 = sum(status),
+#             prop_covid_bacterial_same_admission = mean(covid_and_bacterial_same_admission),
+#             n_covid_bacterial_same_admission = sum(covid_and_bacterial_same_admission))
+```
+9/10/21: These numbers should be the same, and yet they are slightly different! Need to look into why. Why do we have status = 1 for some people who are NOT listed as having covid and bacterial infections in the same admission? Look into how each variable was created to figure out. Not a big impediment, but need to figure out.
+11/22/21: probably don't worry about this, now that I'm using this file for multiple types of infections and covid_bacterial_same_admission is only for bloodstream infections, I think.
 
 Note 8/4/22: I believe the two sections below is focused on setting up with time-invarying covariates and then adding in previous infections as a time varying covariate. I had a lot of indecision about how to do this, and it seems complicated to set up. I will start with trying to figure out how to incorporate ICU stay as a time-varying covariate, and then return to the question of prior infections after that.
 
-#### Set up dataframe with just time-invarying covars
 ```{r}
 # Step 1: set up dataframe with just MRN, time-invarying covariates, time of censoring or event, and event 1 or 0 (where event is onset of infection with path of interest)
 
@@ -243,7 +326,10 @@ path_of_interest <- df %>%
 # 1/25/22: Will want to add in other baseline variables at some point.
 ```
 
-### Set up prior infections:
+
+
+### Set up time-varying covariates
+#### Prior Infections:
 ```{r}
 # Step 2: set up dataframe with one row per MRN, time = 0 and other infection = 0
 step_2 <- df %>% 
@@ -326,7 +412,7 @@ step_3 %>%
 # step 7???? might need to set up the rest of the matching df (like, time in hospital, etc) to use for the matching step later. 
 ```
 
-### Set up ICU stays:
+#### ICU Stays
 
 Some exploration:
 ```{r}
@@ -386,107 +472,35 @@ Note 8/5: mostly looks good, there appear to be a few duplicated lines, which is
 
 ### Add time-varying covariates
 
+#### All pathogens version
 First pass, set up for the the "any infection" version
 Add ICU variable - try to use tmerge
 
 ```{r}
-coxph_df <- tmerge(data1 = matching_df, data2 = matching_df, tstart = first_inpatient_dt, tstop = last_discharge_dt, id = mrn)
+# set up dataframe
+coxph_df2 <- tmerge(data1 = coxph_df, data2 = coxph_df, tstart = first_inpatient_dt, tstop = last_discharge_dt, id = mrn, infection = event(time, status))
+# What if I do it without the tstart and tstop:
+coxph_df2 <- tmerge(data1 = coxph_df, data2 = coxph_df, id = mrn, infection = event(time, status))
+# now this works - but the time is not in a time format.
 
-coxph_df <- tmerge(coxph_df, icu_stay, id = mrn, tdc = icu)
+# What if I use absolute times for the event and for tstart and tstop:
+coxph_df2 <- tmerge(data1 = coxph_df, data2 = coxph_df, tstart = first_inpatient_dt, tstop = last_discharge_dt, id = mrn, infection = event(time_dt, status))
+
+# Add ICU variable
+coxph_df <- tmerge(coxph_df, icu_stay, id = mrn, icu = tdc(icu))
 
 
 ```
+8/11/22 notes: problem - the infection event that I made is coming up as "false" for everything. maybe because the time doesn't fall into the tstart/tstop range? Possible solutions: define "time" differently so that it's an actualy time; or get rid of the start and stop
 
 
 
-## Set up results DF
-Set up dataframe to record results:
-```{r}
-ttest_output <- tibble(sample = c("unmatched", "matched", "matched - uninfected controls only"), 
-                       estimate = c(0, 0, 0),
-                       CI_lb = c(0, 0, 0),
-                       CI_ub = c(0,0,0))
-```
-
-## COXPH model for matching:
-
-I'll run the coxph first, then loop through a simple matching algorithm
-
-### Setup for coxph. 
-
-Check for missingness, since we will get rid of anything with missing variables:
-```{r}
-for (v in c("age_at_admission", "sex", "adt_status", "covid_visits_start_date", "combined_race_ethnicity", "insurance_type", "bmi", "dx_ckd", "dx_dm", "dx_htn",  "dx_cad",  "dx_hrt_failure")) {
-  n_missing <- matching_df_all_vars %>% 
-    filter(is.na(v)) %>% 
-    summarize(n = n()) %>% 
-    unlist()
-  print(n_missing)
-}
-matching_df_all_vars %>% ungroup() %>% filter(is.na(age_at_admission)) %>%  summarize(n = n())
-matching_df_all_vars %>% ungroup() %>% filter(is.na(sex)) %>%  summarize(n = n())
-matching_df_all_vars %>% ungroup() %>% filter(is.na(adt_status)) %>%  summarize(n = n())
-matching_df_all_vars %>% ungroup() %>% filter(is.na(covid_visits_start_date)) %>%  summarize(n = n())
-matching_df_all_vars %>% ungroup() %>% filter(is.na(combined_race_ethnicity)) %>%  summarize(n = n())
-matching_df_all_vars %>% ungroup() %>% filter(is.na(insurance_type)) %>%  summarize(n = n()) #missing 333
-matching_df_all_vars %>% ungroup() %>% filter(is.na(bmi)) %>%  summarize(n = n()) # - many bmi missing missing 589
-matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_ckd)) %>%  summarize(n = n())
-matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_dm)) %>%  summarize(n = n())
-matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_htn)) %>%  summarize(n = n())
-matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_cad)) %>%  summarize(n = n())
-matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_hrt_failure)) %>%  summarize(n = n())
-
-```
+#### Single pathogen version
 
 
-In this code chunk, we add a time variable and exclude cases that have any missing values. This may need to be amended later, but should work for the moment.(9/10/21)
-```{r}
-# coxph_df <- matching_df_all_vars %>% 
-#   mutate(time = case_when(is.na(trt_time) == F ~ trt_time, 
-#                           #time is time of bacterial infection (trt_time) if there was one
-#                           is.na(trt_time) == T ~ covid_days_in_hospital),
-#                           # time is censoring time (days in hospital) if there wasn't an infection
-#          status = !is.na(trt_time)) %>% 
-#         # status is F if no infection (and therefore no "treatment time") and T if there was an infection
-#   filter(any(is.na(age_at_admission), is.na(sex), is.na(covid_visits_start_date), is.na(combined_race_ethnicity), is.na(bmi), is.na(dx_ckd), is.na(dx_dm), is.na(dx_htn), is.na(dx_cad), is.na(dx_hrt_failure), is.na(time), is.na(status)) == F) 
-#   # filter out anything with a missing value for any of our predictor variables or status or time value
-```
 
-ALTERNATE COXPH_DF: USE FOR INDIVIDUAL PATHOGEN ANALYSES.
-COMMENT OUT SECTION ABOVE.
-What's different about this version: variable "time" will be used to do the cox analysis, and refers to the time of infection of the pathogen of interest ONLY and otherwise is the time in hospital. variable "time_any_pathogen" is the time of infection for anyone who has had an infection at the site with any pathogen. It will be used for the sole purpose of determining the risk set from which to draw controls (ie, not including individuals who have already been infected with a different pathogen already as an eligible control.)
+## Run coxph model to create propensity scores
 
-8/3/22 Note: Now that I'm returning to this project, I'm rethinking the above entirely. Why shouldn't people who have already had a different infection be controls? Perhaps I've addressed this differently in different places below, I'll check as I keep reviewing.
-
-```{r}
-coxph_df <- matching_df_all_vars %>% 
-  mutate(time = case_when(is.na(trt_time) == F & organism_name == path ~ trt_time, 
-                          #time is time of bacterial infection of the pathogen of interest (trt_time) if there was one
-                          is.na(trt_time) == T ~ covid_days_in_hospital,
-                          organism_name != path ~ covid_days_in_hospital),
-                          # time is censoring time (days in hospital) if there wasn't an infection of the pathogen of interest.
-         time_any_pathogen = case_when(is.na(trt_time) == F ~ trt_time, 
-                          #time is time of bacterial infection (trt_time) if there was one
-                          is.na(trt_time) == T ~ covid_days_in_hospital),
-                          # time is censoring time (days in hospital) if there wasn't an infection
-         status = (organism_name == path)) %>% 
-        # status is F if no infection (and therefore no "treatment time") and T if there was an infection
-  filter(any(is.na(age_at_admission), is.na(sex), is.na(covid_visits_start_date), is.na(combined_race_ethnicity), is.na(bmi), is.na(dx_ckd), is.na(dx_dm), is.na(dx_htn), is.na(dx_cad), is.na(dx_hrt_failure), is.na(time), is.na(status)) == F) 
-  # filter out anything with a missing value for any of our predictor variables or status or time value
-```
-
-
-Checkpoint: did I correctly set status to be T for people who had infections, F otherwise?
-```{r}
-# coxph_df %>% 
-#   ungroup() %>% 
-#   summarize(prop_status_1 = mean(status),
-#             n_with_status_1 = sum(status),
-#             prop_covid_bacterial_same_admission = mean(covid_and_bacterial_same_admission),
-#             n_covid_bacterial_same_admission = sum(covid_and_bacterial_same_admission))
-```
-9/10/21: These numbers should be the same, and yet they are slightly different! Need to look into why. Why do we have status = 1 for some people who are NOT listed as having covid and bacterial infections in the same admission? Look into how each variable was created to figure out. Not a big impediment, but need to figure out.
-11/22/21: probably don't worry about this, now that I'm using this file for multiple types of infections and covid_bacterial_same_admission is only for bloodstream infections, I think.
 
 ### Set up cox model:
 ```{r}
@@ -505,6 +519,20 @@ propensity <- predict(coxph_model, type = "risk", x = coxph_df)
 - adapt variables to have appropriate reference groups.
 - why doesn't propensity come out as as long as the coxph_model dataframe? Are there a bunch missing all their variables or soemthing????
     Update 9/2: had to do with missing values. updating to napredict might work.....
+
+
+
+
+
+## Set up results DF
+Set up dataframe to record results:
+```{r}
+ttest_output <- tibble(sample = c("unmatched", "matched", "matched - uninfected controls only"), 
+                       estimate = c(0, 0, 0),
+                       CI_lb = c(0, 0, 0),
+                       CI_ub = c(0,0,0))
+```
+
 
 ## Matching and results considering not-yet infected people as controls:
 
@@ -758,4 +786,30 @@ View results of all tests:
 ttest_output %>% 
   kable() #caption = paste(tabletitle, "-", path))
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
