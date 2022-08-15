@@ -239,6 +239,7 @@ coxph_df <- matching_df_all_vars %>%
                           # time is censoring time (days in hospital) if there wasn't an infection
          
          time_dt = ifelse(first_bacterial_start_dt > ymd("2100-01-01"), last_discharge_dt, first_bacterial_start_dt),
+         time_dt = as_datetime(time_dt),
                           #time is time of bacterial infection (trt_time) if there was one
                           # time is censoring time (days in hospital) if there wasn't an infection
                           # time_dt is version with absolute time instead of time since start of hospitalization
@@ -246,11 +247,8 @@ coxph_df <- matching_df_all_vars %>%
          test = last_discharge_dt,
          status = !is.na(trt_time)) %>%
         # status is F if no infection (and therefore no "treatment time") and T if there was an infection
-  filter(any(is.na(age_at_admission), is.na(sex), is.na(covid_visits_start_date), is.na(combined_race_ethnicity), is.na(bmi), is.na(dx_ckd), is.na(dx_dm), is.na(dx_htn), is.na(dx_cad), is.na(dx_hrt_failure), is.na(time), is.na(status)) == F) %>% 
+  filter(any(is.na(age_at_admission), is.na(sex), is.na(covid_visits_start_date), is.na(combined_race_ethnicity), is.na(bmi), is.na(dx_ckd), is.na(dx_dm), is.na(dx_htn), is.na(dx_cad), is.na(dx_hrt_failure), is.na(time), is.na(status)) == F)
   # filter out anything with a missing value for any of our predictor variables or status or time value
-  select(mrn, first_bacterial_start_dt, last_discharge_dt, time_dt, time)
-
-
 ```
 Note 8/11/22: We're missing a lot of BMIs - should I consider an alternative plan for this? Removing them all could create a bias
 
@@ -460,15 +458,20 @@ covid_admissions_bact_urine %>% filter(mrn %in% icu_mrns$mrn) %>% view()
 Make extremely simple ICU variable that can be tmerged (I think) in with the basic data
 ```{r}
 icu_stay <- df %>% 
-  mutate(icu = (adt_care_level == "Intensive Care (ICU)"),
-         start = adt_event_date,
-         stop = adt_discharge_date) %>% 
-  select(mrn, adt_care_level, icu, start, stop)
+  group_by(mrn) %>% 
+  mutate(first_inpatient_dt = min(adt_inpatient_dt),
+         icu = (adt_care_level == "Intensive Care (ICU)"),
+         icu_start = (adt_inpatient_dt - first_inpatient_dt)/ddays(1),
+         icu_stop = (adt_discharge_dt - first_inpatient_dt)/ddays(1)) %>% 
+  select(mrn, adt_care_level, icu, icu_start, adt_event_dt, icu_stop, adt_discharge_dt)
 
 # checkpoint: how does this look for ppl with ICU stays only?
 icu_stay %>% filter(mrn %in% icu_mrns$mrn) %>% arrange(mrn) %>% view()
 ```
 Note 8/5: mostly looks good, there appear to be a few duplicated lines, which is confusing, but otherwise seems ok.
+
+Note 8/15/22: reformatting this to be time since original admission, in hopes that that will make this more compatible with tmerge step below. Need to update so I don't end up with slightly negative time values - I think this is because of discrepancy btw adt event time and adt admission time - make this more consistent throughout.
+
 
 ### Add time-varying covariates
 
@@ -478,21 +481,31 @@ Add ICU variable - try to use tmerge
 
 ```{r}
 # set up dataframe
-coxph_df2 <- tmerge(data1 = coxph_df, data2 = coxph_df, tstart = first_inpatient_dt, tstop = last_discharge_dt, id = mrn, infection = event(time, status))
-# What if I do it without the tstart and tstop:
-coxph_df2 <- tmerge(data1 = coxph_df, data2 = coxph_df, id = mrn, infection = event(time, status))
-# now this works - but the time is not in a time format.
-
-# What if I use absolute times for the event and for tstart and tstop:
-coxph_df2 <- tmerge(data1 = coxph_df, data2 = coxph_df, tstart = first_inpatient_dt, tstop = last_discharge_dt, id = mrn, infection = event(time_dt, status))
+coxph_df2 <- tmerge(data1 = coxph_df, data2 = coxph_df, id = mrn, infection = event(time = time, status))
 
 # Add ICU variable
-coxph_df <- tmerge(coxph_df, icu_stay, id = mrn, icu = tdc(icu))
+coxph_df2 <- tmerge(coxph_df2, icu_stay, id = mrn, icu = tdc(icu_start, icu))
 
-
+# Checkpoint: did ICU merge work? view with fewer variables overall:
+coxph_df2 %>% 
+  select(mrn, time, tstart, tstop, status, infection, icu) %>% 
+  filter(mrn %in% icu_mrns$mrn) %>% arrange(mrn) %>% view()
+# success, I think! at least, patients with icu stays seem to successfully have starts and stops to them....
+# could I have done this much faster manually? Yes, probably. But worth learning maybe?
 ```
-8/11/22 notes: problem - the infection event that I made is coming up as "false" for everything. maybe because the time doesn't fall into the tstart/tstop range? Possible solutions: define "time" differently so that it's an actualy time; or get rid of the start and stop
 
+note 8/15: I think this works, but need to check to make sure I didn't create a problem by using the first adt_inpatient as the baseline for the infections, and the adt_event as the baseline for the icu variable. 
+Nevermind - I think this is fine!
+
+Checkpoint: Observe if the "infection" variable did what I expected it to do after the merge.
+```{r}
+# make temp dataset with just those with infections and select variables to try to see if we can 
+temp <- coxph_df2 %>% 
+  select(mrn, status, infection, time, tstart, tstop, icu) %>% 
+  filter(mrn %in% icu_mrns$mrn) %>% 
+  arrange(mrn)
+```
+I think this works - what I looked for in scrolling through is that in cases where the person has multiple observations, only the final one should have infetion = T if any. 
 
 
 #### Single pathogen version
@@ -504,8 +517,7 @@ coxph_df <- tmerge(coxph_df, icu_stay, id = mrn, icu = tdc(icu))
 
 ### Set up cox model:
 ```{r}
-coxph_model <- coxph(Surv(time, status) ~ age_at_admission + sex + covid_visits_start_date + combined_race_ethnicity + bmi + dx_dm + dx_htn + dx_cad + dx_hrt_failure,
-               data = coxph_df)
+coxph_model <- coxph(Surv(tstart, tstop, infection) ~ age_at_admission + sex + covid_visits_start_date + combined_race_ethnicity + bmi + dx_dm + dx_htn + dx_cad + dx_hrt_failure + icu, data = coxph_df2)
 
 coxph_model %>% 
   gtsummary::tbl_regression(exp = TRUE, estimate_fun = function(x) style_ratio(x, digits = 4))
@@ -519,9 +531,6 @@ propensity <- predict(coxph_model, type = "risk", x = coxph_df)
 - adapt variables to have appropriate reference groups.
 - why doesn't propensity come out as as long as the coxph_model dataframe? Are there a bunch missing all their variables or soemthing????
     Update 9/2: had to do with missing values. updating to napredict might work.....
-
-
-
 
 
 ## Set up results DF
