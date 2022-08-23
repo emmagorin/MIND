@@ -1,0 +1,117 @@
+---
+title: "risk set matching analysis "
+output: 
+  html_document:
+  code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+## Setup
+Load packages
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(rsmatch)
+library(survival)
+library(nbpMatching)
+library(MatchIt)
+library(gtsummary)
+```
+
+Load files:
+- covid_admissions_bact_blood: one line per covid inpatient stay, per blood bacterial infection during that stay
+- covid_admissions_bact_urine: one line per covid inpatient stay, per urine bacterial infection during that stay
+- covid_admissions_bact_resp: one line per covid inpatient stay, per respiratory bacterial infection during that stay
+```{r}
+setwd("/Users/emma/Desktop/local_only/mind_study")
+
+# adt_long <- read_csv("./adt_long.csv")
+adt_long_patients <- read_csv("./adt_long_patients.csv")
+# covid_long <- read_csv("./covid_long.csv")
+# micro_long <- read_csv("./micro_long.csv")
+# micro_long_positives_only <- read_csv("./micro_long_positives_only.csv")
+# patients <- read_csv("./patients.csv", col_types = cols(hospice_dt = col_datetime(format = "")))
+# bacterial_infections_blood <- read_csv("./bacterial_infections_blood.csv")
+# bacterial_infections_urine <- read_csv("./bacterial_infections_urine.csv")
+# bacterial_infections_resp <- read_csv("./bacterial_infections_resp.csv")
+covid_admissions_bact_blood <- read_csv("./covid_admissions_bact_blood.csv")
+covid_admissions_bact_urine <- read_csv("./covid_admissions_bact_urine.csv")
+covid_admissions_bact_resp <- read_csv("./covid_admissions_bact_resp.csv")
+```
+
+Set options to loop through:
+```{r}
+options <- data.frame(site = c(rep("blood", 6), rep("urine", 6), rep("respiratory", 6)),
+                      pathogen = c("all", "KLEBSIELLA PNEUMONIAE", "METHICILLIN-SUSCEPTIBLE STAPHYLOCOCCUS AUREUS", 
+                                   "ESCHERICHIA COLI", "PSEUDOMONAS AERUGINOSA", "ENTEROCOCCUS FAECALIS",
+                                   "all", "ESCHERICHIA COLI", "CANDIDA ALBICANS", "KLEBSIELLA PNEUMONIAE",
+                                   "CANDIDA GLABRATA", "ENTEROCOCCUS FAECALIS", "all", "PSEUDOMONAS AERUGINOSA",
+                                   "KLEBSIELLA PNEUMONIAE", "METHICILLIN-SUSCEPTIBLE STAPHYLOCOCCUS AUREUS",
+                                   "METHICILLIN-RESISTANT STAPHYLOCOCCUS AUREUS", "KLEBSIELLA (FORMERLY ENTEROBACTER) AEROGENES"))
+```
+
+Set options to vary analysis: uncomment section we want to run.
+```{r}
+## blood infections:
+# df <- covid_admissions_bact_blood
+# unmatchedplot <- "LOS unmatched - blood"
+# plot1title <- "LOS after matching - blood"
+# plot2title <- "LOS after matching, only uninfected controls - blood"
+# tabletitle <- "Risk-set matching results - blood"
+
+# urine infections:
+df <- covid_admissions_bact_urine
+unmatchedplot <- "LOS unmatched - urine"
+plot1title <- "LOS after matching - urine"
+plot2title <- "LOS after matching, only uninfected controls - urine"
+tabletitle <- "Risk-set matching results - urine"
+# 
+# resp infections:
+# df <- covid_admissions_bact_resp
+# unmatchedplot <- "LOS unmatched - respiratory"
+# plot1title <- "LOS after matching - respiratory"
+# plot2title <- "LOS after matching, only uninfected controls - respiratory"
+# tabletitle <- "Risk-set matching results - respiratory"
+```
+
+Loop through risk-set matching procedure, output results:
+```{r}
+for(i in length(options)) {
+  i <- 1 #REMOVE BEFORE REAL RUN
+  # Set values, dataframes and titles based on options
+  site <- options$site[i]
+  pathogen <- options$pathogen[i]
+  unmatched_plot_title <- paste("LOS unmatched - ", site, ", ", pathogen, sep = "")
+  matched_plot_title <- paste("LOS after matching - ", site, ", ", pathogen, sep = "")
+  table_title <- paste("Risk-set matching results - ", site, ", ", pathogen, sep = "")
+
+  if(site == "blood") {
+    df <- covid_admissions_bact_blood
+    } else { 
+      if(site == "urine") {
+        df <- covid_admissions_bact_urine
+      } else {
+        df <- covid_admissions_bact_resp
+        } 
+      }
+  
+  # Set up data for matching
+  
+  # Do matching
+  
+  # Produce results
+  
+  # Save results
+  
+}
+```
+
+
+
+
+
+
