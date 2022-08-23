@@ -172,7 +172,7 @@ df %>%
 ## Set up data for matching
 ### Make df, one line per patient, all variables
 
-First step of setting up data for matching:
+Set up data for matching:
 8/6 - to do: update some of these to match "working with dates" instructions from https://www.emilyzabor.com/tutorials/survival_analysis_in_r_tutorial.html#Part_1:_Introduction_to_Survival_Analysis
 ```{r}
 matching_df_all_vars <- df %>% 
@@ -195,13 +195,29 @@ matching_df_all_vars <- df %>%
     # This gets rid of duplicate rows per mrn because of duplicate admissions or duplicate bacterial infections
     # Somewhat similar to just using the summarize command, but I wanted to preserve some of the variables that are 
     # available on every row without having to include them explicitly in summarize, so I did it this way.
-  filter(index == 1)
+  filter(index == 1) %>% 
+  filter(last_discharge_dt > first_inpatient_dt) %>% 
+    # filter out anything where we have a missing last discharge date - at some point I can figure out what's up with this
+  mutate(time = ifelse(is.na(trt_time) == T, covid_days_in_hospital, trt_time),
+                          #time is time of bacterial infection (trt_time) if there was one
+                          
+                          # time is censoring time (days in hospital) if there wasn't an infection
+         
+         time_dt = ifelse(first_bacterial_start_dt > ymd("2100-01-01"), last_discharge_dt, first_bacterial_start_dt),
+         time_dt = as_datetime(time_dt),
+                          #time is time of bacterial infection (trt_time) if there was one
+                          # time is censoring time (days in hospital) if there wasn't an infection
+                          # time_dt is version with absolute time instead of time since start of hospitalization
+                          # Note: used this condition to replace "is.na" since that wasn't recognizing NAs for this variable for some reason.
+         test = last_discharge_dt,
+         status = !is.na(trt_time)) %>%
+        # status is F if no infection (and therefore no "treatment time") and T if there was an infection
+  filter(any(is.na(age_at_admission), is.na(sex), is.na(covid_visits_start_date), is.na(combined_race_ethnicity), is.na(bmi), is.na(dx_ckd), is.na(dx_dm), is.na(dx_htn), is.na(dx_cad), is.na(dx_hrt_failure), is.na(time), is.na(status)) == F)
+  # filter out anything with a missing value for any of our predictor variables or status or time value
 ```
+Note 8/11/22: We're missing a lot of BMIs - should I consider an alternative plan for this? Removing them all could create a bias
 
-
-
-
-Check: does anyone have a missing first_inpatient_dt or last_discharge_dt? Is inpatient_dt < last_discharge_dt for anyone?
+(8/23/22 - this has now been fixed above so no longer relevant) Check: does anyone have a missing first_inpatient_dt or last_discharge_dt? Is inpatient_dt < last_discharge_dt for anyone?
 ```{r}
 matching_df_all_vars %>% filter(is.na(first_inpatient_dt) | is.na(last_discharge_dt))
 matching_df_all_vars %>% filter(is.na(last_discharge_dt))
@@ -209,9 +225,7 @@ matching_df_all_vars %>% filter(first_inpatient_dt > last_discharge_dt) %>% view
 ```
 Ok, weirdly is.na(last_discharge_dt) is false, but there clearly are some where this is missing, based on the next check above. For now, let's just drop these - I'll do so in the time-invarying section
 
-### Set up dataframe for coxph - time-invarying only
-#### All pathogens version
-Check for missingness, since we will get rid of anything with missing variables:
+(8/23/22: this has now been fixed above, so no longer relevant) Check for missingness, since we will get rid of anything with missing variables:
 ```{r}
 for (v in c("age_at_admission", "sex", "adt_status", "covid_visits_start_date", "combined_race_ethnicity", "insurance_type", "bmi", "dx_ckd", "dx_dm", "dx_htn",  "dx_cad",  "dx_hrt_failure")) {
   n_missing <- matching_df_all_vars %>% 
@@ -235,29 +249,6 @@ matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_cad)) %>%  summarize(n = 
 matching_df_all_vars %>% ungroup() %>% filter(is.na(dx_hrt_failure)) %>%  summarize(n = n())
 ```
 
-In this code chunk, we add a time variable and exclude cases that have any missing values. This may need to be amended later, but should work for the moment. (9/10/21)
-```{r}
-coxph_df <- matching_df_all_vars %>%
-  filter(last_discharge_dt > first_inpatient_dt) %>% 
-    # filter out anything where we have a missing last discharge date - at some point I can figure out what's up with this
-  mutate(time = ifelse(is.na(trt_time) == T, covid_days_in_hospital, trt_time),
-                          #time is time of bacterial infection (trt_time) if there was one
-                          
-                          # time is censoring time (days in hospital) if there wasn't an infection
-         
-         time_dt = ifelse(first_bacterial_start_dt > ymd("2100-01-01"), last_discharge_dt, first_bacterial_start_dt),
-         time_dt = as_datetime(time_dt),
-                          #time is time of bacterial infection (trt_time) if there was one
-                          # time is censoring time (days in hospital) if there wasn't an infection
-                          # time_dt is version with absolute time instead of time since start of hospitalization
-                          # Note: used this condition to replace "is.na" since that wasn't recognizing NAs for this variable for some reason.
-         test = last_discharge_dt,
-         status = !is.na(trt_time)) %>%
-        # status is F if no infection (and therefore no "treatment time") and T if there was an infection
-  filter(any(is.na(age_at_admission), is.na(sex), is.na(covid_visits_start_date), is.na(combined_race_ethnicity), is.na(bmi), is.na(dx_ckd), is.na(dx_dm), is.na(dx_htn), is.na(dx_cad), is.na(dx_hrt_failure), is.na(time), is.na(status)) == F)
-  # filter out anything with a missing value for any of our predictor variables or status or time value
-```
-Note 8/11/22: We're missing a lot of BMIs - should I consider an alternative plan for this? Removing them all could create a bias
 
 #### Single pathogen version
 
@@ -266,6 +257,8 @@ COMMENT OUT SECTION ABOVE.
 What's different about this version: variable "time" will be used to do the cox analysis, and refers to the time of infection of the pathogen of interest ONLY and otherwise is the time in hospital. variable "time_any_pathogen" is the time of infection for anyone who has had an infection at the site with any pathogen. It will be used for the sole purpose of determining the risk set from which to draw controls (ie, not including individuals who have already been infected with a different pathogen already as an eligible control.)
 
 8/3/22 Note: Now that I'm returning to this project, I'm rethinking the above entirely. Why shouldn't people who have already had a different infection be controls? Perhaps I've addressed this differently in different places below, I'll check as I keep reviewing.
+
+
 
 ```{r}
 coxph_df <- matching_df_all_vars %>% 
@@ -493,7 +486,7 @@ Add ICU variable - try to use tmerge
 
 ```{r}
 # set up dataframe
-coxph_df2 <- tmerge(data1 = coxph_df, data2 = coxph_df, id = mrn, infection = event(time = time, status))
+coxph_df2 <- tmerge(data1 = coxph_df, data2 = matching_df_all_vars, id = mrn, infection = event(time = time, status))
 
 # Add ICU variable
 coxph_df2 <- tmerge(coxph_df2, icu_stay, id = mrn, icu = tdc(icu_start, icu))
