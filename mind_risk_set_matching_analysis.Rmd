@@ -19,9 +19,13 @@ library(rsmatch)
 library(survival)
 library(nbpMatching)
 library(MatchIt)
+library(gtsummary)
 ```
 
-Load files
+Load files:
+- covid_admissions_bact_blood: one line per covid inpatient stay, per blood bacterial infection during that stay
+- covid_admissions_bact_urine: one line per covid inpatient stay, per urine bacterial infection during that stay
+- covid_admissions_bact_resp: one line per covid inpatient stay, per respiratory bacterial infection during that stay
 ```{r}
 setwd("/Users/emma/Desktop/local_only/mind_study")
 
@@ -31,7 +35,7 @@ adt_long_patients <- read_csv("./adt_long_patients.csv")
 # micro_long <- read_csv("./micro_long.csv")
 # micro_long_positives_only <- read_csv("./micro_long_positives_only.csv")
 # patients <- read_csv("./patients.csv", col_types = cols(hospice_dt = col_datetime(format = "")))
-# bacterial_infections_blood <- read_csv("./bacterial_infections_blood.csv")
+bacterial_infections_blood <- read_csv("./bacterial_infections_blood.csv")
 # bacterial_infections_urine <- read_csv("./bacterial_infections_urine.csv")
 # bacterial_infections_resp <- read_csv("./bacterial_infections_resp.csv")
 covid_admissions_bact_blood <- read_csv("./covid_admissions_bact_blood.csv")
@@ -174,7 +178,7 @@ First step of setting up data for matching:
 matching_df_all_vars <- df %>% 
   group_by(mrn) %>% 
   mutate(first_inpatient_dt = min(adt_inpatient_dt),
-         last_discharge_dt = max(adt_discharge_dt, na.rm = T),
+         last_discharge_dt = suppressWarnings(max(adt_discharge_dt, na.rm = T)),
          covid_time_in_hospital = last_discharge_dt - first_inpatient_dt,
          covid_days_in_hospital = covid_time_in_hospital / ddays(1),
          first_bacterial_start_dt = suppressWarnings(min(first_dt, na.rm = T)),
@@ -193,6 +197,9 @@ matching_df_all_vars <- df %>%
     # available on every row without having to include them explicitly in summarize, so I did it this way.
   filter(index == 1)
 ```
+
+
+
 
 Check: does anyone have a missing first_inpatient_dt or last_discharge_dt? Is inpatient_dt < last_discharge_dt for anyone?
 ```{r}
@@ -336,6 +343,7 @@ step_2 <- df %>%
   select(mrn) %>% # This is just a list of mrns at this point!
   mutate(time = 0,
          other_infection = 0)
+
 # is this step necessary? not sure...
 
 
@@ -457,6 +465,10 @@ covid_admissions_bact_urine %>% filter(mrn %in% icu_mrns$mrn) %>% view()
 
 Make extremely simple ICU variable that can be tmerged (I think) in with the basic data
 ```{r}
+icu_mrns <- adt_long_patients %>% 
+  filter(adt_status == "Intensive Care (ICU)")  %>% 
+  select(mrn) 
+
 icu_stay <- df %>% 
   group_by(mrn) %>% 
   mutate(first_inpatient_dt = min(adt_inpatient_dt),
@@ -466,7 +478,7 @@ icu_stay <- df %>%
   select(mrn, adt_care_level, icu, icu_start, adt_event_dt, icu_stop, adt_discharge_dt)
 
 # checkpoint: how does this look for ppl with ICU stays only?
-icu_stay %>% filter(mrn %in% icu_mrns$mrn) %>% arrange(mrn) %>% view()
+# icu_stay %>% filter(mrn %in% icu_mrns$mrn) %>% arrange(mrn) %>% view()
 ```
 Note 8/5: mostly looks good, there appear to be a few duplicated lines, which is confusing, but otherwise seems ok.
 
@@ -486,11 +498,11 @@ coxph_df2 <- tmerge(data1 = coxph_df, data2 = coxph_df, id = mrn, infection = ev
 # Add ICU variable
 coxph_df2 <- tmerge(coxph_df2, icu_stay, id = mrn, icu = tdc(icu_start, icu))
 
-# Checkpoint: did ICU merge work? view with fewer variables overall:
-coxph_df2 %>% 
-  select(mrn, time, tstart, tstop, status, infection, icu) %>% 
-  filter(mrn %in% icu_mrns$mrn) %>% arrange(mrn) %>% view()
-# success, I think! at least, patients with icu stays seem to successfully have starts and stops to them....
+# # Checkpoint: did ICU merge work? view with fewer variables overall:
+# coxph_df2 %>% 
+#   select(mrn, time, tstart, tstop, status, infection, icu) %>% 
+#   filter(mrn %in% icu_mrns$mrn) %>% arrange(mrn) %>% view()
+# # success, I think! at least, patients with icu stays seem to successfully have starts and stops to them....
 # could I have done this much faster manually? Yes, probably. But worth learning maybe?
 ```
 
@@ -524,6 +536,7 @@ coxph_model %>%
 # Of course I should add quite a few other variables here - however, I think for the moment, I'll leave like this just to make sure I can set this up to run properly. 
 
 propensity <- predict(coxph_model, type = "risk", x = coxph_df)
+#to update, probably, now that I have time varying covars
 ```
 
 
@@ -547,43 +560,52 @@ ttest_output <- tibble(sample = c("unmatched", "matched", "matched - uninfected 
 
 ### Matching:
 
-Set up "risk set" dataframe, which will include everyone for starters. This will be revised each time matching happens.
+Make matches dataframe. This will serve both as a list of infection times from which to we'll draw infections, and as a place to put the matches output.
 ```{r}
-riskset <- tibble(coxph_df, propensity) %>% 
-  select(mrn, status, propensity, time, time_any_pathogen, covid_days_in_hospital)
+matches <- coxph_df %>% 
+  select(mrn, trt_time) %>% 
+  filter(is.na(trt_time) == F) %>% 
+  arrange(trt_time) %>% 
+  mutate(ctrl_mrn = NA)
 ```
 
-Set up dataframe of infection times with space for output:
+Run the matching process, revised to be with replacement and to work with time-varying covariates.
+Outputs a list of infection mrns and their matches.
 ```{r}
-matches <- riskset %>% 
-  filter(status == 1) %>% 
-  select(mrn, propensity, time, time_any_pathogen, status, covid_days_in_hospital) %>% 
-  arrange(time) %>% 
-  mutate(ctrl_mrn = NA, ctrl_propensity = NA, ctrl_time = NA, ctrl_status = NA, ctrl_covid_days_in_hospital = NA)
-```
+for(i in 1:nrow(matches)) {
+  # set infection time:
+  infection_time <- matches$trt_time[i]
+  
+  # set infected person's data:
+  infected_person <- coxph_df2 %>% 
+    filter(mrn == matches$mrn[i], tstop == infection_time)
+  
+  # calculate infected person's propensity:
+  infected_propensity <- predict(coxph_model, newdata = infected_person)
 
-Now run the matching process:
-```{r}
-# for(i in 1:nrow(matches)) {
-#   # pick control among eligible riskset based on propensity
-#   temp <- riskset %>% 
-#     filter(time >= matches$time[i], # riskset only includes those still at risk
-#            mrn != matches$mrn[i]) %>% # and not infection we're trying to match
-#     mutate(propensity_difference = abs(propensity - matches$propensity[i])) %>% 
-#     filter(propensity_difference == min(propensity_difference))
-#       # keep control with closest risk to the infection we're matching
-#   
-#   # plug info about control into matches df
-#   matches$ctrl_mrn[i] <- temp$mrn[1]
-#   matches$ctrl_propensity[i] <- temp$propensity[1]
-#   matches$ctrl_time[i] <- temp$time[1]
-#   matches$ctrl_status[i] <- temp$status[1]
-#   matches$ctrl_covid_days_in_hospital[i] <- temp$covid_days_in_hospital[1]
-#   
-#   # save new riskset excluding the control that was just matched 
-#   riskset <- riskset %>% filter(mrn!=temp$mrn[1])
-# }
+  # create riskset based on infection time: riskset is people who are still at risk (in hospital) and not yet infected 
+  # pick appropriate line for time-varying covariates by picking lines where infection_time falls btw tstart and tstop
+  riskset <- coxph_df2 %>% 
+    filter(tstart < infection_time, infection_time < tstop) 
+ 
+  # calculate propensity:
+  riskset$propensity_score <-  predict(coxph_model, newdata = riskset, id = mrn)
+  
+  # pick control among eligible riskset based on propensity:
+  control <- riskset %>% 
+    filter(is.na(propensity_score) == F) %>% 
+    mutate(propensity_difference = abs(propensity_score - infected_propensity),
+           min_propensity_difference = min(propensity_difference)) %>% 
+    filter(propensity_difference == min_propensity_difference) # select person with closest propensity
+
+  # plug info about control into matches df
+  matches$ctrl_mrn[i] <- control$mrn[1]
+}
 ```
+ok, well, this does something...
+
+
+
 
 SINGLE PATHOGEN VARIATION: time_any_path must be greater than the next exposed person's time_any_path - ie, this is where we exclude people already infected with a different pathogen from the potential control group.
 
@@ -614,10 +636,17 @@ for(i in 1:nrow(matches)) {
 For now, we've included infected people as potential controls if they're still in the risk set, but this could be easily changed. 
 Assess how often people with infections got selected as controls:
 ```{r}
-matches %>% 
-  summarize(n_infected_controls = sum(ctrl_status))
+coxph_df %>% 
+  filter(mrn %in% matches$ctrl_mrn) %>% 
+  mutate(infected = is.na(trt_time)) %>% 
+  ungroup() %>% 
+  summarize(n_infected_controls = sum(infected),
+            prop_infected_controls = mean(infected))
+
 ```
  This is higher than would be seen at random, but is consistent with literature (at least in that "later exposed" ppl are selected as controls more often than random), because presumably these individuals have commonalities with the infected individuals they serve as controls for.
+
+8/22/22 - damn, that's a lot. Will need to think about how we did this, and if this is reasonable.....
 
 ### Set up datasets:
 
