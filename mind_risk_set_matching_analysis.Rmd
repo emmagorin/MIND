@@ -550,10 +550,10 @@ coxph_model %>%
 ## Set up results DF
 Set up dataframe to record results:
 ```{r}
-ttest_output <- tibble(sample = c("unmatched", "matched", "matched - uninfected controls only"), 
-                       estimate = c(0, 0, 0),
-                       CI_lb = c(0, 0, 0),
-                       CI_ub = c(0,0,0))
+ttest_output <- tibble(sample = c("unmatched", "matched"), 
+                       estimate = c(0, 0),
+                       CI_lb = c(0, 0),
+                       CI_ub = c(0,0))
 ```
 
 
@@ -567,7 +567,7 @@ matches <- matching_df_all_vars %>%
   select(mrn, trt_time) %>% 
   filter(is.na(trt_time) == F) %>% 
   arrange(trt_time) %>% 
-  mutate(ctrl_mrn = NA)
+  mutate(covid_days_in_hospital = NA, ctrl_mrn = NA,  ctrl_covid_days_in_hospital = NA)
 ```
 
 Run the matching process, revised to be with replacement and to work with time-varying covariates.
@@ -599,9 +599,13 @@ for(i in 1:nrow(matches)) {
            min_propensity_difference = min(propensity_difference)) %>% 
     filter(propensity_difference == min_propensity_difference) # select person with closest propensity
 
-  # plug info about control into matches df
+  # plug info about infected person and control into matches df
+  matches$covid_days_in_hospital[i] <- infected_person$covid_days_in_hospital[1]
   matches$ctrl_mrn[i] <- control$mrn[1]
+  matches$ctrl_covid_days_in_hospital[i] <- control$covid_days_in_hospital
 }
+
+rm(infection_time, infected_person, infected_propensity, riskset, control)
 ```
 ok, well, this does something...
 
@@ -652,6 +656,7 @@ coxph_df %>%
 ### Set up datasets:
 
 Set up dataset with all data and the matched individuals only
+Note 8/25: not sure why I even needed to do this:
 ```{r}
 # make a list of ids of the people who were matched
 matched_ppl <- c(unlist(matches$mrn), unlist(matches$ctrl_mrn))
@@ -703,13 +708,15 @@ case with the real data.
 
 ```{r}
 # make subsets of data to use for t-tests (there's surely a quicker way, but this should work)
-infected <- matches %>% select(mrn:covid_days_in_hospital)
-all_uninfected <- coxph_df %>% filter(status == F)
-controls <- matches %>% select(ctrl_mrn:ctrl_covid_days_in_hospital)
+infected <- matches %>% select(mrn) %>% left_join(matching_df_all_vars)
+all_uninfected <- matching_df_all_vars %>% filter(status == F)
+controls <- matches %>% select(ctrl_mrn) %>% mutate(mrn = ctrl_mrn) %>% left_join(matching_df_all_vars)
   
+# I wonder how many unique controls we used:
+n_distinct(controls$mrn)
 
 # unmatched sample:
-unmatched_ttest <-t.test(x = infected$covid_days_in_hospital, y = all_uninfected$covid_days_in_hospital) 
+unmatched_ttest <- t.test(x = infected$covid_days_in_hospital, y = all_uninfected$covid_days_in_hospital) 
 
 # matched sample:
 #t.test(x = infected$covid_days_in_hospital, y = controls$ctrl_covid_days_in_hospital)
@@ -730,12 +737,57 @@ ttest_output[2,4] <- matched_ttest$conf.int[2]
 
 Plot results:
 ```{r}
+#histogram:
 matches %>% 
-  ggplot(aes(x = covid_days_in_hospital)) +
-  geom_density(color = "blue") +
-  geom_density(aes(x = ctrl_covid_days_in_hospital), color = "red") +
-  labs(title = paste(plot1title, "-", path), 
-       x = "Length of stay (days)")
+  #set up in easier format for matching. Not perfectly tidy, but will work for this.
+  rename(control = ctrl_covid_days_in_hospital, infected = covid_days_in_hospital) %>% 
+  pivot_longer(cols = c(control, infected), names_to = "infect_control", values_to = "days_in_hospital") %>% 
+  ggplot() +
+  geom_histogram(aes(x = days_in_hospital, group = infect_control, fill = infect_control), alpha = .5, binwidth = 1, position = "identity") +
+  labs(title = paste(plot1title, "-", pathogen), 
+       x = "Length of stay (days)",
+       fill = "LOS") +
+  theme(legend.position = c(.9,.9))
+
+#density plot:
+matches %>% 
+  #set up in easier format for matching. Not perfectly tidy, but will work for this.
+  rename(control = ctrl_covid_days_in_hospital, infected = covid_days_in_hospital) %>% 
+  pivot_longer(cols = c(control, infected), names_to = "infect_control", values_to = "days_in_hospital") %>% 
+  ggplot() +
+  geom_density(aes(x = days_in_hospital, group = infect_control, fill = infect_control), alpha = .5) +
+  labs(title = paste(plot1title, "-", pathogen), 
+       x = "Length of stay (days)",
+       fill = "LOS") +
+  theme(legend.position = c(.9,.9))
+
+# box plot:
+
+
+# dot plot:
+matches %>% 
+   #set up in easier format for matching. Not perfectly tidy, but will work for this.
+  rename(control = ctrl_covid_days_in_hospital, infected = covid_days_in_hospital) %>% 
+  pivot_longer(cols = c(control, infected), names_to = "infect_control", values_to = "days_in_hospital") %>% 
+  ggplot(aes(x = infect_control, y = days_in_hospital)) +
+  ggbeeswarm::geom_quasirandom(
+    shape = 21, color = "white", 
+    alpha = 0.6, size = 3,
+    aes(fill = infect_control)
+  ) +
+  #scale_fill_manual(values = brewer.pal(8, "Accent")[1:2]) +
+  labs(x = "Infected vs control",
+       y = "Days in hospital") +
+  theme_classic() +
+  theme(
+    text = element_text(size = 12, face = "bold", color = "black"),
+    axis.text = element_text(color = "black"),
+    legend.position = "none",
+    plot.title = element_text(size = 10),
+    plot.caption = element_text(hjust = 0)
+  ) 
+
+#etc. could make a box plot or something
 ```
 
 ## Matching and procedure and results considering only never-infected people as controls:
