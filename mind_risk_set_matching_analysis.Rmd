@@ -77,7 +77,8 @@ Options for individual pathogens:
 #path = "ENTEROCOCCUS FAECALIS"
 
 # top 5 urine pathogens:
- path = "ESCHERICHIA COLI"
+pathogen <- "all"
+# path = "ESCHERICHIA COLI"
 # path = "CANDIDA ALBICANS"
 # path = "KLEBSIELLA PNEUMONIAE"
 # path = "CANDIDA GLABRATA"
@@ -178,9 +179,11 @@ Set up data for matching:
 # set up first_bacterial_start_dt so that it reflects a single pathogen OR all pathogens based on the option of pathogen chosen.
 if(pathogen == "all") {
   matching_df_all_vars <- df %>% 
+    group_by(mrn) %>% 
     mutate(first_bacterial_start_dt = suppressWarnings(min(first_dt, na.rm = T)))
 } else {
   matching_df_all_vars <- df %>% 
+    group_by(mrn) %>% 
     mutate(path_of_interest_dt = ifelse(organism_name == pathogen, as_datetime(first_dt), NA),
           # path_of_interest_dt: date of detection of infection with the pathogen of interest, na if not pathogen of interest
            first_bacterial_start_dt = ifelse(!(all(is.na(path_of_interest_dt))), as_datetime(min(path_of_interest_dt, na.rm = T)), NA),
