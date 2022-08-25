@@ -175,13 +175,26 @@ df %>%
 Set up data for matching:
 8/6 - to do: update some of these to match "working with dates" instructions from https://www.emilyzabor.com/tutorials/survival_analysis_in_r_tutorial.html#Part_1:_Introduction_to_Survival_Analysis
 ```{r}
-matching_df_all_vars <- df %>% 
+# set up first_bacterial_start_dt so that it reflects a single pathogen OR all pathogens based on the option of pathogen chosen.
+if(pathogen == "all") {
+  matching_df_all_vars <- df %>% 
+    mutate(first_bacterial_start_dt = suppressWarnings(min(first_dt, na.rm = T)))
+} else {
+  matching_df_all_vars <- df %>% 
+    mutate(path_of_interest_dt = ifelse(organism_name == pathogen, as_datetime(first_dt), NA),
+          # path_of_interest_dt: date of detection of infection with the pathogen of interest, na if not pathogen of interest
+           first_bacterial_start_dt = ifelse(!(all(is.na(path_of_interest_dt))), as_datetime(min(path_of_interest_dt, na.rm = T)), NA),
+           first_bacterial_start_dt = as_datetime(first_path_of_interest_dt))
+}
+
+# all other options for the matching dataframe are the same regardless of pathogen choice
+matching_df_all_vars <- matching_df_all_vars %>% 
   group_by(mrn) %>% 
   mutate(first_inpatient_dt = min(adt_inpatient_dt),
          last_discharge_dt = suppressWarnings(max(adt_discharge_dt, na.rm = T)),
          covid_time_in_hospital = last_discharge_dt - first_inpatient_dt,
          covid_days_in_hospital = covid_time_in_hospital / ddays(1),
-         first_bacterial_start_dt = suppressWarnings(min(first_dt, na.rm = T)),
+         # first_bacterial_start_dt = suppressWarnings(min(first_dt, na.rm = T)),
          age_at_admission = as.numeric((as_date(first_inpatient_dt) - as_date(dob))/365),
          bacterial_infection_ever = replace_na(bacterial_infection_ever, 0),
          bacterial_infection_ever = as.logical(bacterial_infection_ever),
@@ -200,9 +213,7 @@ matching_df_all_vars <- df %>%
     # filter out anything where we have a missing last discharge date - at some point I can figure out what's up with this
   mutate(time = ifelse(is.na(trt_time) == T, covid_days_in_hospital, trt_time),
                           #time is time of bacterial infection (trt_time) if there was one
-                          
                           # time is censoring time (days in hospital) if there wasn't an infection
-         
          time_dt = ifelse(first_bacterial_start_dt > ymd("2100-01-01"), last_discharge_dt, first_bacterial_start_dt),
          time_dt = as_datetime(time_dt),
                           #time is time of bacterial infection (trt_time) if there was one
@@ -261,20 +272,20 @@ What's different about this version: variable "time" will be used to do the cox 
 
 
 ```{r}
-coxph_df <- matching_df_all_vars %>% 
-  mutate(time = case_when(is.na(trt_time) == F & organism_name == path ~ trt_time, 
-                          #time is time of bacterial infection of the pathogen of interest (trt_time) if there was one
-                          is.na(trt_time) == T ~ covid_days_in_hospital,
-                          organism_name != path ~ covid_days_in_hospital),
-                          # time is censoring time (days in hospital) if there wasn't an infection of the pathogen of interest.
-         time_any_pathogen = case_when(is.na(trt_time) == F ~ trt_time, 
-                          #time is time of bacterial infection (trt_time) if there was one
-                          is.na(trt_time) == T ~ covid_days_in_hospital),
-                          # time is censoring time (days in hospital) if there wasn't an infection
-         status = (organism_name == path)) %>% 
-        # status is F if no infection (and therefore no "treatment time") and T if there was an infection
-  filter(any(is.na(age_at_admission), is.na(sex), is.na(covid_visits_start_date), is.na(combined_race_ethnicity), is.na(bmi), is.na(dx_ckd), is.na(dx_dm), is.na(dx_htn), is.na(dx_cad), is.na(dx_hrt_failure), is.na(time), is.na(status)) == F) 
-  # filter out anything with a missing value for any of our predictor variables or status or time value
+# coxph_df <- matching_df_all_vars %>% 
+#   mutate(time = case_when(is.na(trt_time) == F & organism_name == path ~ trt_time, 
+#                           #time is time of bacterial infection of the pathogen of interest (trt_time) if there was one
+#                           is.na(trt_time) == T ~ covid_days_in_hospital,
+#                           organism_name != path ~ covid_days_in_hospital),
+#                           # time is censoring time (days in hospital) if there wasn't an infection of the pathogen of interest.
+#          time_any_pathogen = case_when(is.na(trt_time) == F ~ trt_time, 
+#                           #time is time of bacterial infection (trt_time) if there was one
+#                           is.na(trt_time) == T ~ covid_days_in_hospital),
+#                           # time is censoring time (days in hospital) if there wasn't an infection
+#          status = (organism_name == path)) %>% 
+#         # status is F if no infection (and therefore no "treatment time") and T if there was an infection
+#   filter(any(is.na(age_at_admission), is.na(sex), is.na(covid_visits_start_date), is.na(combined_race_ethnicity), is.na(bmi), is.na(dx_ckd), is.na(dx_dm), is.na(dx_htn), is.na(dx_cad), is.na(dx_hrt_failure), is.na(time), is.na(status)) == F) 
+#   # filter out anything with a missing value for any of our predictor variables or status or time value
 ```
 
 
@@ -294,33 +305,33 @@ Note 8/4/22: I believe the two sections below is focused on setting up with time
 
 ```{r}
 # Step 1: set up dataframe with just MRN, time-invarying covariates, time of censoring or event, and event 1 or 0 (where event is onset of infection with path of interest)
-
-path_of_interest <- df %>% 
-  group_by(mrn) %>% 
-  mutate(first_inpatient_dt = as_datetime(min(adt_inpatient_dt)), # beginning of hospital stay
-         last_discharge_dt = as_datetime(max(adt_discharge_dt)), # end of hospital stay
-         age_at_admission = as.numeric((as_date(first_inpatient_dt) - as_date(dob))/365.25),
-         combined_race_ethnicity = factor(combined_race_ethnicity, 
-                                          levels = c("White", "BLACK OR AFRICAN AMERICAN", "Hispanic/Latino", "other")),
-         sex = factor(sex, levels = c("male", "female")),
-         #test = first_dt, 2/24 - not sure we need this line, think this was actually a test.
-         path_of_interest_dt = ifelse(organism_name == path, as_datetime(first_dt), NA),
-             # path_of_interest_dt: date of detection of infection with the pathogen of interest, na if not pathogen of interest
-         first_path_of_interest_dt = ifelse(!(all(is.na(path_of_interest_dt))), as_datetime(min(path_of_interest_dt, na.rm = T)), NA),
-         first_path_of_interest_dt = as_datetime(first_path_of_interest_dt),
-             # first_path_of_interest_dt: date of first detection of path of interest if patient ever had pathogen of interest
-         time = ifelse(is.na(first_path_of_interest_dt),
-                       as.numeric(((last_discharge_dt) - (first_inpatient_dt)) / ddays(1)),
-                       as.numeric(((first_path_of_interest_dt) - (first_inpatient_dt)) / ddays(1))),
-             # time: time until event if patient had one (detection of pathogen of interest) OR censoring (discharge from hospital)
-         event = !is.na(path_of_interest_dt)) %>%
-  arrange(mrn, first_dt) %>% mutate(index = row_number()) %>% filter(index == 1) %>% 
-    # index sets it up for us to choose just one row per mrn, which should include all information we need.
-    # This gets rid of duplicate rows per mrn because of duplicate admissions or duplicate bacterial infections
-    # Somewhat similar to just using the summarize command, but I wanted to preserve some of the variables that are 
-    # available on every row without having to include them explicitly in summarize, so I did it this way.
-  select(mrn, first_inpatient_dt, last_discharge_dt, age_at_admission, combined_race_ethnicity, sex, first_path_of_interest_dt, time, event)
- 
+# 
+# path_of_interest <- df %>% 
+#   group_by(mrn) %>% 
+#   mutate(first_inpatient_dt = as_datetime(min(adt_inpatient_dt)), # beginning of hospital stay
+#          last_discharge_dt = as_datetime(max(adt_discharge_dt)), # end of hospital stay
+#          age_at_admission = as.numeric((as_date(first_inpatient_dt) - as_date(dob))/365.25),
+#          combined_race_ethnicity = factor(combined_race_ethnicity, 
+#                                           levels = c("White", "BLACK OR AFRICAN AMERICAN", "Hispanic/Latino", "other")),
+#          sex = factor(sex, levels = c("male", "female")),
+#          #test = first_dt, 2/24 - not sure we need this line, think this was actually a test.
+#          path_of_interest_dt = ifelse(organism_name == path, as_datetime(first_dt), NA),
+#              # path_of_interest_dt: date of detection of infection with the pathogen of interest, na if not pathogen of interest
+#          first_path_of_interest_dt = ifelse(!(all(is.na(path_of_interest_dt))), as_datetime(min(path_of_interest_dt, na.rm = T)), NA),
+#          first_path_of_interest_dt = as_datetime(first_path_of_interest_dt),
+#              # first_path_of_interest_dt: date of first detection of path of interest if patient ever had pathogen of interest
+#          time = ifelse(is.na(first_path_of_interest_dt),
+#                        as.numeric(((last_discharge_dt) - (first_inpatient_dt)) / ddays(1)),
+#                        as.numeric(((first_path_of_interest_dt) - (first_inpatient_dt)) / ddays(1))),
+#              # time: time until event if patient had one (detection of pathogen of interest) OR censoring (discharge from hospital)
+#          event = !is.na(path_of_interest_dt)) %>%
+#   arrange(mrn, first_dt) %>% mutate(index = row_number()) %>% filter(index == 1) %>% 
+#     # index sets it up for us to choose just one row per mrn, which should include all information we need.
+#     # This gets rid of duplicate rows per mrn because of duplicate admissions or duplicate bacterial infections
+#     # Somewhat similar to just using the summarize command, but I wanted to preserve some of the variables that are 
+#     # available on every row without having to include them explicitly in summarize, so I did it this way.
+#   select(mrn, first_inpatient_dt, last_discharge_dt, age_at_admission, combined_race_ethnicity, sex, first_path_of_interest_dt, time, event)
+#  
 # 1/25/22: Will want to add in other baseline variables at some point.
 ```
 
@@ -486,10 +497,10 @@ Add ICU variable - try to use tmerge
 
 ```{r}
 # set up dataframe
-coxph_df2 <- tmerge(data1 = coxph_df, data2 = matching_df_all_vars, id = mrn, infection = event(time = time, status))
+coxph_df <- tmerge(data1 = matching_df_all_vars, data2 = matching_df_all_vars, id = mrn, infection = event(time = time, status))
 
 # Add ICU variable
-coxph_df2 <- tmerge(coxph_df2, icu_stay, id = mrn, icu = tdc(icu_start, icu))
+coxph_df <- tmerge(coxph_df, icu_stay, id = mrn, icu = tdc(icu_start, icu))
 
 # # Checkpoint: did ICU merge work? view with fewer variables overall:
 # coxph_df2 %>% 
@@ -505,15 +516,12 @@ Nevermind - I think this is fine!
 Checkpoint: Observe if the "infection" variable did what I expected it to do after the merge.
 ```{r}
 # make temp dataset with just those with infections and select variables to try to see if we can 
-temp <- coxph_df2 %>% 
+temp <- coxph_df %>% 
   select(mrn, status, infection, time, tstart, tstop, icu) %>% 
   filter(mrn %in% icu_mrns$mrn) %>% 
   arrange(mrn)
 ```
 I think this works - what I looked for in scrolling through is that in cases where the person has multiple observations, only the final one should have infetion = T if any. 
-
-
-#### Single pathogen version
 
 
 
@@ -522,14 +530,11 @@ I think this works - what I looked for in scrolling through is that in cases whe
 
 ### Set up cox model:
 ```{r}
-coxph_model <- coxph(Surv(tstart, tstop, infection) ~ age_at_admission + sex + covid_visits_start_date + combined_race_ethnicity + bmi + dx_dm + dx_htn + dx_cad + dx_hrt_failure + icu, data = coxph_df2)
+coxph_model <- coxph(Surv(tstart, tstop, infection) ~ age_at_admission + sex + covid_visits_start_date + combined_race_ethnicity + bmi + dx_dm + dx_htn + dx_cad + dx_hrt_failure + icu, data = coxph_df)
 
 coxph_model %>% 
   gtsummary::tbl_regression(exp = TRUE, estimate_fun = function(x) style_ratio(x, digits = 4))
 # Of course I should add quite a few other variables here - however, I think for the moment, I'll leave like this just to make sure I can set this up to run properly. 
-
-propensity <- predict(coxph_model, type = "risk", x = coxph_df)
-#to update, probably, now that I have time varying covars
 ```
 
 
@@ -555,7 +560,7 @@ ttest_output <- tibble(sample = c("unmatched", "matched", "matched - uninfected 
 
 Make matches dataframe. This will serve both as a list of infection times from which to we'll draw infections, and as a place to put the matches output.
 ```{r}
-matches <- coxph_df %>% 
+matches <- matching_df_all_vars %>% 
   select(mrn, trt_time) %>% 
   filter(is.na(trt_time) == F) %>% 
   arrange(trt_time) %>% 
@@ -570,7 +575,7 @@ for(i in 1:nrow(matches)) {
   infection_time <- matches$trt_time[i]
   
   # set infected person's data:
-  infected_person <- coxph_df2 %>% 
+  infected_person <- coxph_df %>% 
     filter(mrn == matches$mrn[i], tstop == infection_time)
   
   # calculate infected person's propensity:
@@ -578,7 +583,7 @@ for(i in 1:nrow(matches)) {
 
   # create riskset based on infection time: riskset is people who are still at risk (in hospital) and not yet infected 
   # pick appropriate line for time-varying covariates by picking lines where infection_time falls btw tstart and tstop
-  riskset <- coxph_df2 %>% 
+  riskset <- coxph_df %>% 
     filter(tstart < infection_time, infection_time < tstop) 
  
   # calculate propensity:
@@ -605,25 +610,25 @@ SINGLE PATHOGEN VARIATION: time_any_path must be greater than the next exposed p
 8/3/22 note: I've set this up without replacement, but I'm thinking it will be both easier and more correct to set it up WITH replacement based on my reading yesterday. Maybe redo to change this.
 
 ```{r}
-for(i in 1:nrow(matches)) {
-  # pick control among eligible riskset based on propensity
-  temp <- riskset %>% 
-    filter(time_any_pathogen >= matches$time_any_pathogen[i], # riskset only includes those still at risk
-           mrn != matches$mrn[i]) %>% # and not infection we're trying to match
-    mutate(propensity_difference = abs(propensity - matches$propensity[i])) %>% 
-    filter(propensity_difference == min(propensity_difference))
-      # keep control with closest risk to the infection we're matching
-  
-  # plug info about control into matches df
-  matches$ctrl_mrn[i] <- temp$mrn[1]
-  matches$ctrl_propensity[i] <- temp$propensity[1]
-  matches$ctrl_time[i] <- temp$time[1]
-  matches$ctrl_status[i] <- temp$status[1]
-  matches$ctrl_covid_days_in_hospital[i] <- temp$covid_days_in_hospital[1]
-  
-  # save new riskset excluding the control that was just matched 
-  riskset <- riskset %>% filter(mrn!=temp$mrn[1])
-}
+# for(i in 1:nrow(matches)) {
+#   # pick control among eligible riskset based on propensity
+#   temp <- riskset %>% 
+#     filter(time_any_pathogen >= matches$time_any_pathogen[i], # riskset only includes those still at risk
+#            mrn != matches$mrn[i]) %>% # and not infection we're trying to match
+#     mutate(propensity_difference = abs(propensity - matches$propensity[i])) %>% 
+#     filter(propensity_difference == min(propensity_difference))
+#       # keep control with closest risk to the infection we're matching
+#   
+#   # plug info about control into matches df
+#   matches$ctrl_mrn[i] <- temp$mrn[1]
+#   matches$ctrl_propensity[i] <- temp$propensity[1]
+#   matches$ctrl_time[i] <- temp$time[1]
+#   matches$ctrl_status[i] <- temp$status[1]
+#   matches$ctrl_covid_days_in_hospital[i] <- temp$covid_days_in_hospital[1]
+#   
+#   # save new riskset excluding the control that was just matched 
+#   riskset <- riskset %>% filter(mrn!=temp$mrn[1])
+# }
 ```
 
 For now, we've included infected people as potential controls if they're still in the risk set, but this could be easily changed. 
@@ -688,7 +693,7 @@ https://cran.r-project.org/web/packages/MatchIt/vignettes/assessing-balance.html
 https://onlinelibrary-wiley-com.ezproxy.cul.columbia.edu/doi/epdf/10.1002/sim.3697
 
 In this very small example, there was already a pretty good balance between groups in the 
-covariates before matchin, and comparable balance after matching. I don't expect this to be the 
+covariates before matching, and comparable balance after matching. I don't expect this to be the 
 case with the real data.
 
 ### Look at results:
