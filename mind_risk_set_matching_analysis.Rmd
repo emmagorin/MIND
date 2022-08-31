@@ -43,55 +43,6 @@ covid_admissions_bact_urine <- read_csv("./covid_admissions_bact_urine.csv")
 covid_admissions_bact_resp <- read_csv("./covid_admissions_bact_resp.csv")
 ```
 
-Set options to vary analysis: uncomment section we want to run.
-```{r}
-## blood infections:
-# df <- covid_admissions_bact_blood
-# unmatchedplot <- "LOS unmatched - blood"
-# plot1title <- "LOS after matching - blood"
-# plot2title <- "LOS after matching, only uninfected controls - blood"
-# tabletitle <- "Risk-set matching results - blood"
-
-# urine infections:
-df <- covid_admissions_bact_urine
-unmatchedplot <- "LOS unmatched - urine"
-plot1title <- "LOS after matching - urine"
-plot2title <- "LOS after matching, only uninfected controls - urine"
-tabletitle <- "Risk-set matching results - urine"
-# 
-# resp infections:
-# df <- covid_admissions_bact_resp
-# unmatchedplot <- "LOS unmatched - respiratory"
-# plot1title <- "LOS after matching - respiratory"
-# plot2title <- "LOS after matching, only uninfected controls - respiratory"
-# tabletitle <- "Risk-set matching results - respiratory"
-```
-
-Options for individual pathogens:
-```{r}
-# Top 5 blood pathogens:
-#path = "KLEBSIELLA PNEUMONIAE"
-#path = "METHICILLIN-SUSCEPTIBLE STAPHYLOCOCCUS AUREUS"
-#path = "ESCHERICHIA COLI"
-#path = "PSEUDOMONAS AERUGINOSA"
-#path = "ENTEROCOCCUS FAECALIS"
-
-# top 5 urine pathogens:
-pathogen <- "all"
-# path = "ESCHERICHIA COLI"
-# path = "CANDIDA ALBICANS"
-# path = "KLEBSIELLA PNEUMONIAE"
-# path = "CANDIDA GLABRATA"
-# path = "ENTEROCOCCUS FAECALIS"
-
-# top 5 respiratory pathogens:
-# path = "PSEUDOMONAS AERUGINOSA"
-# path = "KLEBSIELLA PNEUMONIAE"
-# path = "METHICILLIN-SUSCEPTIBLE STAPHYLOCOCCUS AUREUS"
-# path = "METHICILLIN-RESISTANT STAPHYLOCOCCUS AUREUS"
-# path = "KLEBSIELLA (FORMERLY ENTEROBACTER) AEROGENES"
-```
-
 
 ## Exploratory code also in mind_exploratory rmd file
 Most of the following code is also in the mind_exploratory rmd file. Revisit questions about how many covid admissions each patient has and how many bacterial infections each patient has occuring during covid admissions:
@@ -472,6 +423,7 @@ covid_admissions_bact_urine %>% filter(mrn %in% icu_mrns$mrn) %>% view()
 
 Make extremely simple ICU variable that can be tmerged (I think) in with the basic data
 ```{r}
+
 icu_mrns <- adt_long_patients %>% 
   filter(adt_status == "Intensive Care (ICU)")  %>% 
   select(mrn) 
