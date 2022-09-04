@@ -43,7 +43,6 @@ covid_admissions_bact_urine <- read_csv("./covid_admissions_bact_urine.csv")
 covid_admissions_bact_resp <- read_csv("./covid_admissions_bact_resp.csv")
 ```
 
-
 ## Exploratory code also in mind_exploratory rmd file
 Most of the following code is also in the mind_exploratory rmd file. Revisit questions about how many covid admissions each patient has and how many bacterial infections each patient has occuring during covid admissions:
 ```{r}
@@ -446,7 +445,6 @@ Note 8/15/22: reformatting this to be time since original admission, in hopes th
 
 ### Add time-varying covariates
 
-#### All pathogens version
 First pass, set up for the the "any infection" version
 Add ICU variable - try to use tmerge
 
@@ -690,7 +688,7 @@ ttest_output[2,4] <- matched_ttest$conf.int[2]
 Plot results:
 ```{r}
 #histogram:
-matches %>% 
+matched_histogram <- matches %>% 
   #set up in easier format for matching. Not perfectly tidy, but will work for this.
   rename(control = ctrl_covid_days_in_hospital, infected = covid_days_in_hospital) %>% 
   pivot_longer(cols = c(control, infected), names_to = "infect_control", values_to = "days_in_hospital") %>% 
@@ -702,7 +700,7 @@ matches %>%
   theme(legend.position = c(.9,.9))
 
 #density plot:
-matches %>% 
+matched_density <- matches %>% 
   #set up in easier format for matching. Not perfectly tidy, but will work for this.
   rename(control = ctrl_covid_days_in_hospital, infected = covid_days_in_hospital) %>% 
   pivot_longer(cols = c(control, infected), names_to = "infect_control", values_to = "days_in_hospital") %>% 
@@ -717,19 +715,21 @@ matches %>%
 
 
 # dot plot:
-matches %>% 
+matched_dots <- matches %>% 
    #set up in easier format for matching. Not perfectly tidy, but will work for this.
   rename(control = ctrl_covid_days_in_hospital, infected = covid_days_in_hospital) %>% 
   pivot_longer(cols = c(control, infected), names_to = "infect_control", values_to = "days_in_hospital") %>% 
+  mutate(infect_control = factor(infect_control, levels = c("infected", "control"))) %>% 
   ggplot(aes(x = infect_control, y = days_in_hospital)) +
   ggbeeswarm::geom_quasirandom(
     shape = 21, color = "white", 
-    alpha = 0.6, size = 3,
+    alpha = 0.3, size = 3,
     aes(fill = infect_control)
   ) +
   #scale_fill_manual(values = brewer.pal(8, "Accent")[1:2]) +
-  labs(x = "Infected vs control",
-       y = "Days in hospital") +
+  labs(x = "",
+       y = "Days in hospital",
+       title = "LOS for infected patients vs matched controls") +
   theme_classic() +
   theme(
     text = element_text(size = 12, face = "bold", color = "black"),
@@ -739,7 +739,34 @@ matches %>%
     plot.caption = element_text(hjust = 0)
   ) 
 
-#etc. could make a box plot or something
+#etc. could make a box plot or violin plot or something
+```
+
+Plot comparison pre-matching:
+To do- - add N for infected and not infected
+```{r}
+# dot plot:
+unmatched_dots <- matching_df_all_vars %>% 
+   #set up in easier format for matching. Not perfectly tidy, but will work for this.
+  mutate(infect_control = ifelse(status == T, "infected", "not infected")) %>% 
+  ggplot(aes(x = infect_control, y = covid_days_in_hospital)) +
+  ggbeeswarm::geom_quasirandom(
+    shape = 21, color = "white", 
+    alpha = 0.3, size = 3,
+    aes(fill = infect_control)
+  ) +
+  #scale_fill_manual(values = brewer.pal(8, "Accent")[1:2]) +
+  labs(x = "",
+       y = "Days in hospital",
+       title = "LOS for infected vs uninfected patients - before matching") +
+  theme_classic() +
+  theme(
+    text = element_text(size = 12, face = "bold", color = "black"),
+    axis.text = element_text(color = "black"),
+    legend.position = "none",
+    plot.title = element_text(size = 10),
+    plot.caption = element_text(hjust = 0)
+  ) 
 ```
 
 ## Matching and procedure and results considering only never-infected people as controls:
@@ -749,85 +776,85 @@ note 8/3: This doesn't really make sense, I think I should probably should consi
 
 Set up "risk set" dataframe, which will include ONLY UNINFECTED people
 ```{r}
-riskset2 <- tibble(coxph_df, propensity) %>% 
-  select(mrn, status, propensity, time, covid_days_in_hospital) %>% 
-  filter(status == F)
-
-infected2 <- tibble(coxph_df, propensity) %>% 
-  select(mrn, status, propensity, time, covid_days_in_hospital) %>% 
-  filter(status == T)
+# riskset2 <- tibble(coxph_df, propensity) %>% 
+#   select(mrn, status, propensity, time, covid_days_in_hospital) %>% 
+#   filter(status == F)
+# 
+# infected2 <- tibble(coxph_df, propensity) %>% 
+#   select(mrn, status, propensity, time, covid_days_in_hospital) %>% 
+#   filter(status == T)
 ```
 
 Set up dataframe of infection times with space for output:
 ```{r}
-matches2 <- infected2 %>% 
-  select(mrn, propensity, time, status, covid_days_in_hospital) %>% 
-  arrange(time) %>% 
-  mutate(ctrl_mrn = NA, ctrl_propensity = NA, ctrl_time = NA, ctrl_status = NA, ctrl_covid_days_in_hospital = NA)
+# matches2 <- infected2 %>% 
+#   select(mrn, propensity, time, status, covid_days_in_hospital) %>% 
+#   arrange(time) %>% 
+#   mutate(ctrl_mrn = NA, ctrl_propensity = NA, ctrl_time = NA, ctrl_status = NA, ctrl_covid_days_in_hospital = NA)
 ```
 
 Now run the matching process:
 ```{r}
-for(i in 1:nrow(matches2)) {
-  # pick control among eligible riskset based on propensity
-  temp <- riskset2 %>% 
-    filter(time >= matches2$time[i], # riskset only includes those still at risk
-           mrn != matches2$mrn[i]) %>% # and not infection we're trying to match
-    mutate(propensity_difference = abs(propensity - matches2$propensity[i])) %>% 
-    filter(propensity_difference == min(propensity_difference))
-      # keep control with closest risk to the infection we're matching
-  
-  # plug info about control into matches df
-  matches2$ctrl_mrn[i] <- temp$mrn[1]
-  matches2$ctrl_propensity[i] <- temp$propensity[1]
-  matches2$ctrl_time[i] <- temp$time[1]
-  matches2$ctrl_status[i] <- temp$status[1]
-  matches2$ctrl_covid_days_in_hospital[i] <- temp$covid_days_in_hospital[1]
-  
-  # save new riskset excluding the control that was just matched 
-  riskset2 <- riskset2 %>% filter(mrn!=temp$mrn[1])
-}
+# for(i in 1:nrow(matches2)) {
+#   # pick control among eligible riskset based on propensity
+#   temp <- riskset2 %>% 
+#     filter(time >= matches2$time[i], # riskset only includes those still at risk
+#            mrn != matches2$mrn[i]) %>% # and not infection we're trying to match
+#     mutate(propensity_difference = abs(propensity - matches2$propensity[i])) %>% 
+#     filter(propensity_difference == min(propensity_difference))
+#       # keep control with closest risk to the infection we're matching
+#   
+#   # plug info about control into matches df
+#   matches2$ctrl_mrn[i] <- temp$mrn[1]
+#   matches2$ctrl_propensity[i] <- temp$propensity[1]
+#   matches2$ctrl_time[i] <- temp$time[1]
+#   matches2$ctrl_status[i] <- temp$status[1]
+#   matches2$ctrl_covid_days_in_hospital[i] <- temp$covid_days_in_hospital[1]
+#   
+#   # save new riskset excluding the control that was just matched 
+#   riskset2 <- riskset2 %>% filter(mrn!=temp$mrn[1])
+# }
 ```
 
 ### Results:
 
 ```{r}
-# make subsets of data to use for t-tests (there's surely a quicker way, but this should work)
-# infected <- matches %>% select(mrn:covid_days_in_hospital)
-# all_uninfected <- coxph_df %>% filter(status == F)
-controls2 <- matches2 %>% select(ctrl_mrn:ctrl_covid_days_in_hospital) 
-
-# unmatched sample:
-t.test(x = infected$covid_days_in_hospital, y = all_uninfected$covid_days_in_hospital)
-
-# matched sample:
-#t.test(x = infected$covid_days_in_hospital, y = controls2$ctrl_covid_days_in_hospital)
-
-# paired sample t-test (following watson et al for this)
-matched_ttest2 <- matches2 %>% mutate(diff = covid_days_in_hospital - ctrl_covid_days_in_hospital) %>% 
-  pull(diff) %>% # pick 
-  t.test()
-
-# put ttest results in df
-ttest_output[3,2] <- matched_ttest2$estimate
-ttest_output[3,3] <- matched_ttest2$conf.int[1]
-ttest_output[3,4] <- matched_ttest2$conf.int[2]
+# # make subsets of data to use for t-tests (there's surely a quicker way, but this should work)
+# # infected <- matches %>% select(mrn:covid_days_in_hospital)
+# # all_uninfected <- coxph_df %>% filter(status == F)
+# controls2 <- matches2 %>% select(ctrl_mrn:ctrl_covid_days_in_hospital) 
+# 
+# # unmatched sample:
+# t.test(x = infected$covid_days_in_hospital, y = all_uninfected$covid_days_in_hospital)
+# 
+# # matched sample:
+# #t.test(x = infected$covid_days_in_hospital, y = controls2$ctrl_covid_days_in_hospital)
+# 
+# # paired sample t-test (following watson et al for this)
+# matched_ttest2 <- matches2 %>% mutate(diff = covid_days_in_hospital - ctrl_covid_days_in_hospital) %>% 
+#   pull(diff) %>% # pick 
+#   t.test()
+# 
+# # put ttest results in df
+# ttest_output[3,2] <- matched_ttest2$estimate
+# ttest_output[3,3] <- matched_ttest2$conf.int[1]
+# ttest_output[3,4] <- matched_ttest2$conf.int[2]
 ```
 
 Plot results:
 ```{r}
-matches2 %>% 
-  ggplot(aes(x = covid_days_in_hospital)) +
-  geom_density(color = "blue") +
-  geom_density(aes(x = ctrl_covid_days_in_hospital), color = "red") +
-  labs(title = plot2title, 
-       x = "Length of stay (days)")
+# matches2 %>% 
+#   ggplot(aes(x = covid_days_in_hospital)) +
+#   geom_density(color = "blue") +
+#   geom_density(aes(x = ctrl_covid_days_in_hospital), color = "red") +
+#   labs(title = plot2title, 
+#        x = "Length of stay (days)")
 ```
 
 View results of all tests:
 ```{r echo=FALSE}
-ttest_output %>% 
-  kable() #caption = paste(tabletitle, "-", path))
+# ttest_output %>% 
+#   kable() #caption = paste(tabletitle, "-", path))
 ```
 
 
