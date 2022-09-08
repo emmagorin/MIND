@@ -485,7 +485,7 @@ I think this works - what I looked for in scrolling through is that in cases whe
 ```{r}
 coxph_model <- coxph(Surv(tstart, tstop, infection) ~ age_at_admission + sex + covid_visits_start_date + combined_race_ethnicity + bmi + dx_dm + dx_htn + dx_cad + dx_hrt_failure + icu, data = coxph_df)
 
-coxph_model %>% 
+coxph_output <- coxph_model %>% 
   gtsummary::tbl_regression(exp = TRUE, estimate_fun = function(x) style_ratio(x, digits = 4))
 # Of course I should add quite a few other variables here - however, I think for the moment, I'll leave like this just to make sure I can set this up to run properly. 
 ```
@@ -497,14 +497,6 @@ coxph_model %>%
     Update 9/2: had to do with missing values. updating to napredict might work.....
 
 
-## Set up results DF
-Set up dataframe to record results:
-```{r}
-ttest_output <- tibble(sample = c("unmatched", "matched"), 
-                       estimate = c(0, 0),
-                       CI_lb = c(0, 0),
-                       CI_ub = c(0,0))
-```
 
 
 ## Matching and results considering not-yet infected people as controls:
@@ -654,16 +646,47 @@ In this very small example, there was already a pretty good balance between grou
 covariates before matching, and comparable balance after matching. I don't expect this to be the 
 case with the real data.
 
-### Look at results:
+### Generate results:
 
+Generate basic stats on infections:
 ```{r}
+n_infections <- nrow(matches)
+
+#site <- "urine"
+
+median_infection_time <- median(matches$trt_time)
+iqr_infection_time <- IQR(matches$trt_time)
+infection_time_quantiles <- quantile(matches$trt_time, c(.25, .5, .75))
+
+timing_infections <-  matches %>% 
+  ggplot() +
+  geom_density(aes(x = trt_time), alpha = .5, fill = "light blue") +
+  labs(title = paste("Time of infection detection", "-", site, "-", pathogen), 
+       x = "Days since admission") 
+
+```
+
+Create table of t-test:
+```{r}
+## Set up dataframe to record results:
+ttest_output <- tibble(sample = c("unmatched", "matched"), 
+                       estimated_difference_LOS = c(0, 0),
+                       CI_lb = c(0, 0),
+                       CI_ub = c(0,0))
+
+
 # make subsets of data to use for t-tests (there's surely a quicker way, but this should work)
-infected <- matches %>% select(mrn) %>% left_join(matching_df_all_vars)
+infected <- matches %>% select(mrn) %>% left_join(matching_df_all_vars) 
 all_uninfected <- matching_df_all_vars %>% filter(status == F)
 controls <- matches %>% select(ctrl_mrn) %>% mutate(mrn = ctrl_mrn) %>% left_join(matching_df_all_vars)
   
 # I wonder how many unique controls we used:
-n_distinct(controls$mrn)
+n_unique_controls <- n_distinct(controls$mrn)
+
+# what proportion of controls were people with subsequent infections:
+n_infected_controls <- controls %>% ungroup() %>% summarize(sum = sum(status))
+n_infected_controls <- n_infected_controls$sum[1]
+prop_infected_controls <- round(n_infected_controls/n_infections, 3)
 
 # unmatched sample:
 unmatched_ttest <- t.test(x = infected$covid_days_in_hospital, y = all_uninfected$covid_days_in_hospital) 
@@ -683,6 +706,16 @@ ttest_output[1,4] <- unmatched_ttest$conf.int[2]
 ttest_output[2,2] <- matched_ttest$estimate
 ttest_output[2,3] <- matched_ttest$conf.int[1]
 ttest_output[2,4] <- matched_ttest$conf.int[2]
+
+# KS test results for matched sample:
+ks_matched <- ks.test(matches$covid_days_in_hospital, matches$ctrl_covid_days_in_hospital)
+ks_matched_d <- round(ks_matched$statistic, 3)
+ks_matched_p <- round(ks_matched$p.value, 3)
+# KS test results for unmatched sample:
+ks_unmatched <- ks.test(infected$covid_days_in_hospital, all_uninfected$covid_days_in_hospital)
+ks_unmatched_d <- round(ks_unmatched$statistic, 3)
+ks_unmatched_p <- round(ks_unmatched$p.value, 3)
+
 ```
 
 Plot results:
@@ -715,6 +748,10 @@ matched_density <- matches %>%
 
 
 # dot plot:
+matched_plot_title <- paste("LOS after matching - ", site, ", ", pathogen, sep = "")
+infected_quantiles <- round(quantile(matches$covid_days_in_hospital, c(.25,.5,.75)), 2)
+control_quantiles <- round(quantile(matches$ctrl_covid_days_in_hospital, c(.25,.5,.75)), 2)
+
 matched_dots <- matches %>% 
    #set up in easier format for matching. Not perfectly tidy, but will work for this.
   rename(control = ctrl_covid_days_in_hospital, infected = covid_days_in_hospital) %>% 
@@ -729,7 +766,8 @@ matched_dots <- matches %>%
   #scale_fill_manual(values = brewer.pal(8, "Accent")[1:2]) +
   labs(x = "",
        y = "Days in hospital",
-       title = "LOS for infected patients vs matched controls") +
+       title = matched_plot_title, 
+       caption = paste("Infected 25, 50 and 75 percentiles:", infected_quantiles[1], ",", infected_quantiles[2], ",", infected_quantiles[3], "\nControl 25, 50 and 75 percentiles:", control_quantiles[1], ",", control_quantiles[2], ",", control_quantiles[3], "\nKS D statistic:", ks_matched_d, "KS p-value:", ks_matched_p)) + # to fill in with t-test results, etc. 
   theme_classic() +
   theme(
     text = element_text(size = 12, face = "bold", color = "black"),
@@ -745,7 +783,12 @@ matched_dots <- matches %>%
 Plot comparison pre-matching:
 To do- - add N for infected and not infected
 ```{r}
+#make quantiles
+uninfected_only <- matching_df_all_vars %>% filter(status == F)
+uninfected_quantiles <- round(quantile(uninfected_only$covid_days_in_hospital, c(.25,.5,.75)), 2)
+
 # dot plot:
+unmatched_plot_title <- paste("LOS unmatched - ", site, ", ", pathogen, sep = "")
 unmatched_dots <- matching_df_all_vars %>% 
    #set up in easier format for matching. Not perfectly tidy, but will work for this.
   mutate(infect_control = ifelse(status == T, "infected", "not infected")) %>% 
@@ -758,7 +801,8 @@ unmatched_dots <- matching_df_all_vars %>%
   #scale_fill_manual(values = brewer.pal(8, "Accent")[1:2]) +
   labs(x = "",
        y = "Days in hospital",
-       title = "LOS for infected vs uninfected patients - before matching") +
+       title = unmatched_plot_title, 
+       caption = paste("Infected 25, 50 and 75 percentiles:", infected_quantiles[1], ",", infected_quantiles[2], ",", infected_quantiles[3], "\nControl 25, 50 and 75 percentiles:", uninfected_quantiles[1], ",", uninfected_quantiles[2], ",", uninfected_quantiles[3], "\nKS D statistic:", ks_unmatched_d, "KS p-value:", ks_unmatched_p)) +
   theme_classic() +
   theme(
     text = element_text(size = 12, face = "bold", color = "black"),
@@ -767,6 +811,25 @@ unmatched_dots <- matching_df_all_vars %>%
     plot.title = element_text(size = 10),
     plot.caption = element_text(hjust = 0)
   ) 
+```
+
+Print results:
+```{r}
+print(paste("Pathogen(s):", pathogen, "; Site:", site))
+print(paste("Number of infections among covid patients: ", n_infections))
+
+timing_infections
+
+coxph_output
+
+print(paste("Controls are now selected with replacement. Number of unique individuals selected as controls: ", n_unique_controls))
+print(paste("Controls are selected only based on information available at time of infection. Proportion of controls who subsequently were infected with this pathogen at this site: ", prop_infected_controls))
+
+kable(ttest_output)
+
+wrap_plots(
+  unmatched_dots, matched_dots, nrow = 1
+)
 ```
 
 
